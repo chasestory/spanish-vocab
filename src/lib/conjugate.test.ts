@@ -3,7 +3,7 @@ import { conjugate, type Person } from "./conjugate.ts";
 
 const P: Person[] = ["yo", "tu", "el", "nosotros", "vosotros", "ellos"];
 
-function row(inf: string, tense: "present" | "preterite" | "imperfect" | "future" | "conditional" | "presentSubjunctive") {
+function row(inf: string, tense: "present" | "preterite" | "imperfect" | "future" | "conditional" | "presentSubjunctive" | "imperfectSubjunctive" | "futureSubjunctive") {
   const paradigm = conjugate(inf);
   if (!paradigm) throw new Error(inf);
   return P.map((person) => paradigm[tense][person]);
@@ -265,5 +265,74 @@ describe("conjugation engine", () => {
     expect(conjugate("satisfacer")?.participle).toBe("satisfecho");
     expect(conjugate("elegir")?.present.yo).toBe("elijo");
     expect(conjugate("elegir")?.presentSubjunctive.yo).toBe("elija");
+  });
+
+  it("builds imperfect subjunctive, future subjunctive, and perfect tenses", () => {
+    const hablar = conjugate("hablar");
+    expect(row("hablar", "imperfectSubjunctive")).toEqual(["hablara", "hablaras", "hablara", "habláramos", "hablarais", "hablaran"]);
+    expect(row("hablar", "futureSubjunctive")).toEqual(["hablare", "hablares", "hablare", "habláremos", "hablareis", "hablaren"]);
+    expect(hablar?.presentPerfect.yo).toBe("he hablado");
+    expect(hablar?.pluperfect.nosotros).toBe("habíamos hablado");
+    expect(hablar?.futurePerfect.el).toBe("habrá hablado");
+    expect(hablar?.conditionalPerfect.tu).toBe("habrías hablado");
+    expect(hablar?.presentPerfectSubjunctive.yo).toBe("haya hablado");
+    expect(hablar?.pluperfectSubjunctive.ellos).toBe("hubieran hablado");
+    expect(hablar?.marks.present.yo).toBe(false);
+    expect(hablar?.marks.participle).toBe(false);
+
+    expect(row("comer", "imperfectSubjunctive")[0]).toBe("comiera");
+    expect(row("comer", "imperfectSubjunctive")[3]).toBe("comiéramos");
+    expect(row("vivir", "futureSubjunctive")[3]).toBe("viviéremos");
+
+    expect(row("ser", "imperfectSubjunctive")).toEqual(["fuera", "fueras", "fuera", "fuéramos", "fuerais", "fueran"]);
+    expect(row("ser", "futureSubjunctive")[0]).toBe("fuere");
+    expect(row("ser", "futureSubjunctive")[3]).toBe("fuéremos");
+    expect(row("ir", "imperfectSubjunctive")[2]).toBe("fuera");
+    expect(conjugate("ser")?.marks.present.yo).toBe(true);
+    expect(conjugate("ser")?.presentPerfect.yo).toBe("he sido");
+
+    expect(row("estar", "imperfectSubjunctive")[0]).toBe("estuviera");
+    expect(row("estar", "imperfectSubjunctive")[3]).toBe("estuviéramos");
+    expect(row("tener", "imperfectSubjunctive")).toEqual(["tuviera", "tuvieras", "tuviera", "tuviéramos", "tuvierais", "tuvieran"]);
+    expect(row("hacer", "imperfectSubjunctive")[2]).toBe("hiciera");
+    expect(conjugate("hacer")?.presentPerfect.yo).toBe("he hecho");
+    expect(conjugate("hacer")?.marks.participle).toBe(true);
+    expect(conjugate("hacer")?.marks.presentPerfect.yo).toBe(true);
+    expect(row("decir", "imperfectSubjunctive")[0]).toBe("dijera");
+    expect(conjugate("decir")?.pluperfectSubjunctive.yo).toBe("hubiera dicho");
+    expect(row("poder", "imperfectSubjunctive")[0]).toBe("pudiera");
+    expect(row("poner", "imperfectSubjunctive")[5]).toBe("pusieran");
+    expect(conjugate("poner")?.futurePerfect.yo).toBe("habré puesto");
+    expect(row("querer", "imperfectSubjunctive")[0]).toBe("quisiera");
+    expect(row("saber", "imperfectSubjunctive")[2]).toBe("supiera");
+    expect(row("venir", "imperfectSubjunctive")[0]).toBe("viniera");
+    expect(row("dar", "imperfectSubjunctive")).toEqual(["diera", "dieras", "diera", "diéramos", "dierais", "dieran"]);
+    expect(row("ver", "imperfectSubjunctive")[0]).toBe("viera");
+    expect(conjugate("ver")?.presentPerfect.el).toBe("ha visto");
+    expect(row("haber", "imperfectSubjunctive")[0]).toBe("hubiera");
+    expect(row("andar", "imperfectSubjunctive")[0]).toBe("anduviera");
+    expect(row("conducir", "imperfectSubjunctive")[0]).toBe("condujera");
+    expect(row("traer", "imperfectSubjunctive")[2]).toBe("trajera");
+    expect(row("caber", "imperfectSubjunctive")[0]).toBe("cupiera");
+    expect(row("pedir", "imperfectSubjunctive")[2]).toBe("pidiera");
+    expect(row("dormir", "imperfectSubjunctive")[5]).toBe("durmieran");
+    expect(row("sentir", "imperfectSubjunctive")[3]).toBe("sintiéramos");
+    expect(row("leer", "imperfectSubjunctive")[0]).toBe("leyera");
+    expect(row("oír", "imperfectSubjunctive")[2]).toBe("oyera");
+    expect(row("construir", "imperfectSubjunctive")[0]).toBe("construyera");
+    expect(row("reír", "imperfectSubjunctive")[0]).toBe("riera");
+    expect(row("reír", "imperfectSubjunctive")[3]).toBe("riéramos");
+    expect(conjugate("jugar")?.preterite.yo).toBe("jugué");
+    expect(conjugate("jugar")?.marks.preterite.yo).toBe(true);
+    expect(conjugate("jugar")?.marks.present.nosotros).toBe(false);
+    expect(conjugate("pensar")?.marks.present.yo).toBe(true);
+    expect(conjugate("pensar")?.marks.present.nosotros).toBe(false);
+    expect(conjugate("buscar")?.marks.preterite.yo).toBe(true);
+    expect(conjugate("buscar")?.marks.present.yo).toBe(false);
+
+    const irse = conjugate("lavarse");
+    expect(irse?.reflexive).toBe(true);
+    expect(irse?.present.yo).toBe("lavo");
+    expect(conjugate("sentarse")?.imperative.tu).toBe("sienta");
   });
 });

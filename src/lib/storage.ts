@@ -25,6 +25,11 @@ interface RaizDB extends DBSchema {
   reviews: { key: number; value: ReviewEvent; indexes: { "by-ts": number } };
 }
 
+export interface DayActivity {
+  reviews: number;
+  correct: number;
+}
+
 export interface BackupFile {
   version: 1;
   exportedAt: string;
@@ -33,11 +38,13 @@ export interface BackupFile {
   meta: MetaState;
   cards: CardState[];
   reviews: ReviewEvent[];
+  activity?: Record<string, DayActivity>;
 }
 
 const SETTINGS_KEY = "raiz.settings";
 const FILTERS_KEY = "raiz.filters";
 const META_KEY = "raiz.meta";
+const ACTIVITY_KEY = "raiz.activity";
 
 let database: Promise<IDBPDatabase<RaizDB>> | null = null;
 
@@ -96,6 +103,30 @@ export function saveMeta(meta: MetaState): void {
   localStorage.setItem(META_KEY, JSON.stringify(meta));
 }
 
+export function loadActivity(): Record<string, DayActivity> {
+  try {
+    const raw = localStorage.getItem(ACTIVITY_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, DayActivity>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveActivity(activity: Record<string, DayActivity>): void {
+  localStorage.setItem(ACTIVITY_KEY, JSON.stringify(activity));
+}
+
+export function bumpActivity(correct: boolean, now = new Date()): Record<string, DayActivity> {
+  const all = loadActivity();
+  const day = localDate(now);
+  const prev = all[day] ?? { reviews: 0, correct: 0 };
+  all[day] = { reviews: prev.reviews + 1, correct: prev.correct + (correct ? 1 : 0) };
+  saveActivity(all);
+  return all;
+}
+
 export async function allCards(): Promise<CardState[]> {
   return (await db()).getAll("cards");
 }
@@ -135,6 +166,7 @@ export async function exportBackup(): Promise<BackupFile> {
     meta: loadMeta(),
     cards: await database.getAll("cards"),
     reviews: await database.getAll("reviews"),
+    activity: loadActivity(),
   };
 }
 
@@ -165,7 +197,29 @@ export async function importBackup(file: BackupFile, mode: "replace" | "merge"):
     }
   }
   await tx.done;
-  if (file.settings) saveSettings({ ...defaultSettings, ...file.settings });
-  if (file.filters) saveFilters({ ...defaultFilters, ...file.filters });
-  if (file.meta && mode === "replace") saveMeta({ ...defaultMeta(), ...file.meta });
+  if (mode === "replace") {
+    if (file.settings) saveSettings({ ...defaultSettings, ...file.settings });
+    if (file.filters) saveFilters({ ...defaultFilters, ...file.filters });
+    if (file.meta) saveMeta({ ...defaultMeta(), ...file.meta });
+    if (file.activity) saveActivity(file.activity);
+  } else if (file.meta) {
+    const local = loadMeta();
+    const streak = Math.max(local.streak, file.meta.streak ?? 0);
+    const last = (file.meta.streak ?? 0) > local.streak
+      ? file.meta.lastStreakDate
+      : (file.meta.streak ?? 0) < local.streak
+        ? local.lastStreakDate
+        : [local.lastStreakDate, file.meta.lastStreakDate].filter(Boolean).sort().at(-1) ?? null;
+    saveMeta({ ...local, streak, lastStreakDate: last });
+    if (file.activity) {
+      const activity = loadActivity();
+      for (const [day, stat] of Object.entries(file.activity)) {
+        const prev = activity[day];
+        activity[day] = prev
+          ? { reviews: Math.max(prev.reviews, stat.reviews), correct: Math.max(prev.correct, stat.correct) }
+          : stat;
+      }
+      saveActivity(activity);
+    }
+  }
 }

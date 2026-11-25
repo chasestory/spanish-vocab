@@ -6,6 +6,8 @@ import { newCard, reviewCard, type Rating } from "./lib/srs.ts";
 import {
   addReview,
   allCards,
+  bumpActivity,
+  loadActivity,
   loadFilters,
   loadMeta,
   loadSettings,
@@ -15,6 +17,7 @@ import {
   saveFilters,
   saveMeta,
   saveSettings,
+  type DayActivity,
   type ReviewEvent,
 } from "./lib/storage.ts";
 import type { Filters, MetaState, Settings } from "./lib/types.ts";
@@ -26,6 +29,7 @@ interface AppState {
   settings: Settings;
   filters: Filters;
   meta: MetaState;
+  activity: Record<string, DayActivity>;
   setSettings: (next: Settings) => void;
   setFilters: (next: Filters) => void;
   grade: (id: string, rating: Rating, mode: string) => Promise<void>;
@@ -49,17 +53,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [settings, setSettingsState] = useState<Settings>(() => loadSettings());
   const [filters, setFiltersState] = useState<Filters>(() => loadFilters());
   const [meta, setMeta] = useState<MetaState>(() => loadMeta());
+  const [activity, setActivity] = useState<Record<string, DayActivity>>(() => loadActivity());
 
   const reload = useCallback(async () => {
     const [loaded, stored, recent] = await Promise.all([
       loadCorpus(),
       allCards(),
-      reviewsSince(Date.now() - 30 * 86_400_000),
+      reviewsSince(Date.now() - 180 * 86_400_000),
     ]);
     setCorpus(loaded);
     setCards(new Map(stored.map((card) => [card.id, card])));
     setReviews(recent);
     setMeta(loadMeta());
+    setActivity(loadActivity());
   }, []);
 
   useEffect(() => {
@@ -78,13 +84,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       settings.theme === "dark" ||
       (settings.theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     root.classList.toggle("dark", dark);
+    root.classList.toggle("large", settings.textSize === "large");
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = () => {
       if (settings.theme === "system") root.classList.toggle("dark", media.matches);
     };
     media.addEventListener("change", onChange);
     return () => media.removeEventListener("change", onChange);
-  }, [settings.theme]);
+  }, [settings.theme, settings.textSize]);
 
   const setSettings = useCallback((next: Settings) => {
     setSettingsState(next);
@@ -114,6 +121,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const metaNext = noteReview(meta, current.status === "new", settings.dailyGoal, new Date(now));
       saveMeta(metaNext);
       setMeta(metaNext);
+      setActivity(bumpActivity(rating !== "again", new Date(now)));
       setCards((prev) => new Map(prev).set(id, next));
       setReviews((prev) => [...prev, event]);
     },
@@ -133,8 +141,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => {
     if (!corpus) return null;
-    return { corpus, cards, reviews, settings, filters, meta, setSettings, setFilters, grade, toggleStar, reload };
-  }, [corpus, cards, reviews, settings, filters, meta, setSettings, setFilters, grade, toggleStar, reload]);
+    return { corpus, cards, reviews, settings, filters, meta, activity, setSettings, setFilters, grade, toggleStar, reload };
+  }, [corpus, cards, reviews, settings, filters, meta, activity, setSettings, setFilters, grade, toggleStar, reload]);
 
   if (error) {
     return (

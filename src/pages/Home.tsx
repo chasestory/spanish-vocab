@@ -1,33 +1,30 @@
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { streakNow, useApp } from "../context.tsx";
 import { isLearned } from "../lib/srs.ts";
-
-const BANDS = [
-  { label: "Top 100", min: 1, max: 100 },
-  { label: "101–500", min: 101, max: 500 },
-  { label: "501–1k", min: 501, max: 1000 },
-  { label: "1k–2k", min: 1001, max: 2000 },
-  { label: "2k–3k", min: 2001, max: 3000 },
-  { label: "3k–5k", min: 3001, max: 5000 },
-];
+import { buildSession, selectionSummary } from "../lib/session.ts";
 
 export function Home() {
-  const { corpus, cards, reviews, settings, meta } = useApp();
+  const { corpus, cards, settings, filters, meta } = useApp();
   const now = Date.now();
-  const week = now - 7 * 86_400_000;
-  const recent = reviews.filter((review) => review.ts >= week);
-  const accuracy = recent.length ? Math.round((recent.filter((review) => review.correct).length / recent.length) * 100) : null;
-  const due = [...cards.values()].filter((card) => card.status !== "new" && card.due <= now).length;
-  const learned = corpus.words.filter((word) => isLearned(cards.get(word.id))).length;
+  const queue = useMemo(
+    () => buildSession(corpus.words, corpus.phrases, cards, filters, Math.max(0, settings.newPerDay - meta.newToday), now, settings.region),
+    [corpus.words, corpus.phrases, cards, filters, settings.newPerDay, settings.region, meta.newToday, now],
+  );
+  const due = queue.filter((card) => {
+    const state = cards.get(card.id);
+    return state && state.status !== "new" && state.due <= now;
+  }).length;
   const goal = Math.max(1, settings.dailyGoal);
   const done = Math.min(meta.reviewsToday, goal);
   const streak = streakNow(meta);
+  const learned = corpus.words.filter((word) => isLearned(cards.get(word.id))).length;
   return (
     <div className="page">
       <header className="hero">
-        <p className="eyebrow">Spanish by frequency</p>
-        <h1>Hola, Chase.</h1>
-        <p className="lede">The 5,000 Spanish words people actually say, from the most common on down. No account. It keeps working on the train.</p>
+        <p className="eyebrow">Today</p>
+        <h1>{streak === 1 ? "1 day" : `${streak} days`}</h1>
+        <p className="lede">{done} of {goal} reviews · {learned.toLocaleString()} words learned</p>
       </header>
       <section className="card goal">
         <svg width="92" height="92" viewBox="0 0 92 92" aria-hidden="true">
@@ -48,37 +45,15 @@ export function Home() {
           </text>
         </svg>
         <div>
-          <h2 style={{ marginBottom: 4 }}>{streak === 1 ? "1-day streak" : `${streak}-day streak`}</h2>
+          <h2 style={{ marginBottom: 4 }}>{due ? `${due} due now` : queue.length ? `${queue.length} cards ready` : "Nothing to study"}</h2>
           <p className="muted" style={{ marginTop: 0 }}>
-            {due} due now · {Math.max(0, settings.newPerDay - meta.newToday)} new cards left today
+            {selectionSummary(filters)}
           </p>
-          <Link className="btn primary" to="/study" style={{ display: "inline-grid", placeItems: "center", textDecoration: "none" }}>
-            Study now
-          </Link>
         </div>
       </section>
-      <section className="stat-grid">
-        <div className="stat"><b>{learned}</b><span>words learned</span></div>
-        <div className="stat"><b>{accuracy === null ? "—" : `${accuracy}%`}</b><span>accuracy, 7 days</span></div>
-        <div className="stat"><b>{corpus.words.length.toLocaleString()}</b><span>lemmas in the deck</span></div>
-      </section>
-      <section className="panel">
-        <h2>Learned by band</h2>
-        <div className="band-list">
-          {BANDS.map((band) => {
-            const slice = corpus.words.filter((word) => word.rank >= band.min && word.rank <= band.max);
-            const known = slice.filter((word) => isLearned(cards.get(word.id))).length;
-            const pct = slice.length ? (known / slice.length) * 100 : 0;
-            return (
-              <div className="band" key={band.label}>
-                <span>{band.label}</span>
-                <div className="track" aria-hidden="true"><i style={{ width: `${pct}%` }} /></div>
-                <span className="muted">{known}/{slice.length}</span>
-              </div>
-            );
-          })}
-        </div>
-      </section>
+      <Link className="btn primary huge" to="/study?start=1">Start</Link>
+      <p className="muted">Start mixes what’s due with a few new cards from the selection you saved.</p>
+      <Link className="back" to="/study">Change what to study</Link>
     </div>
   );
 }

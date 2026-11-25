@@ -1,52 +1,108 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { renderSVG } from "uqr";
 import { useApp } from "../context.tsx";
-import { spanishVoices, ttsAvailable } from "../lib/speech.ts";
-import { exportBackup, importBackup } from "../lib/storage.ts";
+import { decodeSync, previewMerge, encodeSync, type MergePreview } from "../lib/sync.ts";
+import { exportBackup, importBackup, type BackupFile } from "../lib/storage.ts";
 import type { Settings as SettingsShape } from "../lib/types.ts";
 
 export function Settings() {
   const { settings, setSettings, corpus, reload } = useApp();
-  const [voices, setVoices] = useState(spanishVoices());
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  useEffect(() => {
-    if (!ttsAvailable()) return;
-    const load = () => setVoices(spanishVoices());
-    load();
-    speechSynthesis.addEventListener("voiceschanged", load);
-    return () => speechSynthesis.removeEventListener("voiceschanged", load);
-  }, []);
+  const [code, setCode] = useState("");
+  const [paste, setPaste] = useState("");
+  const [preview, setPreview] = useState<MergePreview | null>(null);
+  const [pending, setPending] = useState<BackupFile | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   function patch(partial: Partial<SettingsShape>) {
     setSettings({ ...settings, ...partial });
   }
 
-  async function download() {
-    const backup = await exportBackup();
-    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "raiz-progress.json";
-    link.click();
-    URL.revokeObjectURL(url);
-    setMessage("Backup downloaded.");
+  async function makeCode() {
+    const next = await encodeSync(await exportBackup());
+    setCode(next);
+    setMessage("Sync code ready. Copy it, or download the file.");
     setError("");
   }
 
-  async function onFile(file: File | undefined, mode: "merge" | "replace") {
-    if (!file) return;
+  function download(filename: string, contents: string, type: string) {
+    const blob = new Blob([contents], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function prepare(raw: string) {
     try {
-      const parsed = JSON.parse(await file.text());
-      await importBackup(parsed, mode);
-      await reload();
-      setMessage(mode === "merge" ? "Progress merged." : "This device now uses the imported file.");
+      const incoming = await decodeSync(raw);
+      const local = await exportBackup();
+      const result = previewMerge(local, incoming);
+      setPreview(result.preview);
+      setPending(result.merged);
       setError("");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not read that file.");
       setMessage("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not read that backup.");
+      setPreview(null);
+      setPending(null);
     }
   }
+
+  async function confirm() {
+    if (!pending) return;
+    await importBackup(pending, "replace");
+    await reload();
+    setPreview(null);
+    setPending(null);
+    setMessage("Merged. The newest review of each card stayed, stars were combined, and the longer streak was kept.");
+  }
+
+  useEffect(() => {
+    if (!scanning) return;
+    let stop = false;
+    let stream: MediaStream | null = null;
+    const Detector = (window as unknown as { BarcodeDetector?: new (opts: { formats: string[] }) => { detect: (source: HTMLVideoElement) => Promise<{ rawValue?: string }[]> } }).BarcodeDetector;
+    if (!Detector || !navigator.mediaDevices?.getUserMedia) {
+      setError("This browser can’t scan a QR code. Paste the code instead.");
+      setScanning(false);
+      return;
+    }
+    const detector = new Detector({ formats: ["qr_code"] });
+    void (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        if (!videoRef.current) return;
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        const tick = async () => {
+          if (stop || !videoRef.current) return;
+          const found = await detector.detect(videoRef.current);
+          const value = found.find((item) => item.rawValue)?.rawValue;
+          if (value) {
+            setScanning(false);
+            await prepare(value);
+            return;
+          }
+          requestAnimationFrame(() => void tick());
+        };
+        void tick();
+      } catch {
+        setError("The camera didn’t open. Paste the code instead.");
+        setScanning(false);
+      }
+    })();
+    return () => {
+      stop = true;
+      stream?.getTracks().forEach((track) => track.stop());
+    };
+  }, [scanning]);
+
+  const qr = code && code.length < 1800 ? renderSVG(code, { pixelSize: 4, whiteColor: "#fffdf8", blackColor: "#1c1915" }) : "";
 
   return (
     <div className="page">
@@ -54,11 +110,11 @@ export function Settings() {
         <p className="eyebrow">Settings</p>
         <h1>Make it yours</h1>
       </header>
-      <section className="panel" style={{ display: "grid", gap: 12 }}>
+      <section className="panel stack">
         <div className="toggle">
           <div>
             <strong>Spain Spanish</strong>
-            <div className="muted">Shows vosotros and prefers an es-ES voice. Off uses Latin America and hides vosotros.</div>
+            <div className="muted">Shows vosotros. Off is Latin America and hides it.</div>
           </div>
           <input type="checkbox" checked={settings.region === "spain"} onChange={(event) => patch({ region: event.target.checked ? "spain" : "latam" })} />
         </div>
@@ -68,36 +124,58 @@ export function Settings() {
         <label className="field">New cards per day
           <input type="number" min={0} max={100} value={settings.newPerDay} onChange={(event) => patch({ newPerDay: Number(event.target.value) })} />
         </label>
-        <label className="field">Voice speed ({settings.rate.toFixed(2)})
-          <input type="range" min={0.7} max={1.2} step={0.02} value={settings.rate} onChange={(event) => patch({ rate: Number(event.target.value) })} />
-        </label>
-        <label className="field">Spanish voice
-          <select value={settings.voiceURI} onChange={(event) => patch({ voiceURI: event.target.value })} disabled={!ttsAvailable()}>
-            <option value="">Best match for the region</option>
-            {voices.map((voice) => <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name} ({voice.lang})</option>)}
-          </select>
-        </label>
-        {!ttsAvailable() && <p className="muted">This browser has no speech synthesis. Listening mode still shows the choices.</p>}
-        <label className="field">Theme
-          <select value={settings.theme} onChange={(event) => patch({ theme: event.target.value as SettingsShape["theme"] })}>
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
+        <div className="field"><span>Appearance</span>
+          <div className="seg">
+            {(["system", "light", "dark"] as const).map((theme) => (
+              <button key={theme} className={`btn${settings.theme === theme ? " primary" : ""}`} type="button" onClick={() => patch({ theme })}>{theme}</button>
+            ))}
+          </div>
+        </div>
+        <div className="field"><span>Text size</span>
+          <div className="seg">
+            <button className={`btn${settings.textSize !== "large" ? " primary" : ""}`} type="button" onClick={() => patch({ textSize: "normal" })}>Normal</button>
+            <button className={`btn${settings.textSize === "large" ? " primary" : ""}`} type="button" onClick={() => patch({ textSize: "large" })}>Large</button>
+          </div>
+        </div>
       </section>
-      <section className="panel" style={{ display: "grid", gap: 10 }}>
+      <section className="panel stack">
         <h2>Move progress</h2>
-        <p className="muted">Everything lives on this device. Export a JSON file and import it on the iPad.</p>
-        <button className="btn" type="button" onClick={() => void download()}>Export JSON</button>
-        <label className="btn" style={{ display: "grid", placeItems: "center" }}>
-          Merge a file
-          <input type="file" accept="application/json" hidden onChange={(event) => void onFile(event.target.files?.[0], "merge")} />
+        <p className="muted">No account. A sync code carries reviews, stars, and the streak. On the other device, import merges: the newer review wins, stars combine, and the longer streak stays. Settings on this device stay put.</p>
+        <button className="btn primary" type="button" onClick={() => void makeCode()}>Make a sync code</button>
+        {code && (
+          <>
+            <textarea readOnly value={code} rows={4} onFocus={(event) => event.currentTarget.select()} />
+            <div className="row">
+              <button className="btn" type="button" onClick={() => void navigator.clipboard.writeText(code).then(() => setMessage("Copied."))}>Copy</button>
+              <button className="btn" type="button" onClick={() => download("raiz-sync.txt", code, "text/plain")}>Download code</button>
+              <button className="btn" type="button" onClick={() => void exportBackup().then((file) => download("raiz-progress.json", JSON.stringify(file, null, 2), "application/json"))}>Download JSON</button>
+            </div>
+            {qr ? <div className="qr" dangerouslySetInnerHTML={{ __html: qr }} /> : <p className="muted">This backup is too long for a QR code. Copy it or download the file.</p>}
+          </>
+        )}
+        <label className="field">Paste a code or JSON
+          <textarea value={paste} rows={4} onChange={(event) => setPaste(event.target.value)} placeholder="raiz1.…" />
         </label>
-        <label className="btn" style={{ display: "grid", placeItems: "center" }}>
-          Replace this device
-          <input type="file" accept="application/json" hidden onChange={(event) => void onFile(event.target.files?.[0], "replace")} />
-        </label>
+        <div className="row">
+          <button className="btn" type="button" onClick={() => void prepare(paste)}>Preview import</button>
+          <button className="btn" type="button" onClick={() => setScanning(true)}>Scan QR</button>
+          <label className="btn" style={{ display: "grid", placeItems: "center" }}>
+            Choose a file
+            <input type="file" accept="application/json,text/plain,.txt" hidden onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              void file.text().then((text) => prepare(text));
+            }} />
+          </label>
+        </div>
+        {scanning && <video ref={videoRef} className="scan" muted playsInline />}
+        {preview && (
+          <div className="verdict">
+            <p>{preview.incomingCards} cards in the backup. {preview.added} new, {preview.updated} with a newer review, {preview.newStars} newly starred.</p>
+            <p>Streak becomes {preview.streak} (this device {preview.localStreak}, the other {preview.incomingStreak}).</p>
+            <button className="btn primary" type="button" onClick={() => void confirm()}>Merge into this device</button>
+          </div>
+        )}
         {message && <p className="verdict correct">{message}</p>}
         {error && <p className="verdict wrong">{error}</p>}
       </section>
@@ -110,9 +188,6 @@ export function Settings() {
               <a href={source.url}>{source.name}</a> · {source.license}. {source.note}
             </li>
           ))}
-        </ul>
-        <ul>
-          {(corpus.meta.filters ?? []).map((line) => <li key={line} className="muted">{line}</li>)}
         </ul>
       </section>
     </div>

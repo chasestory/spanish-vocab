@@ -1,9 +1,10 @@
-/** Spanish conjugation for the tenses Raíz drills.
+/** Spanish conjugation for Raíz.
 
 Regular -ar/-er/-ir verbs, orthographic changes, stem changes, and the
 irregular families are generated from stems and endings. Suppletive verbs
 (ser, ir) and a handful of accent patterns are tables because the forms
-do not share a stem.
+do not share a stem. Imperfect and future subjunctive are built from the
+ellos preterite. Perfect tenses are haber plus the past participle.
 */
 
 export const PERSONS = ["yo", "tu", "el", "nosotros", "vosotros", "ellos"] as const;
@@ -11,19 +12,51 @@ export type Person = (typeof PERSONS)[number];
 export const IMPERATIVE_PERSONS = ["tu", "el", "nosotros", "vosotros", "ellos"] as const;
 export type ImperativePerson = (typeof IMPERATIVE_PERSONS)[number];
 
-export type Tense =
+export type FiniteTense =
   | "present"
   | "preterite"
   | "imperfect"
   | "future"
   | "conditional"
   | "presentSubjunctive"
-  | "imperative";
+  | "imperfectSubjunctive"
+  | "futureSubjunctive";
+
+export type PerfectTense =
+  | "presentPerfect"
+  | "pluperfect"
+  | "futurePerfect"
+  | "conditionalPerfect"
+  | "presentPerfectSubjunctive"
+  | "pluperfectSubjunctive";
+
+export type Tense = FiniteTense | "imperative";
 
 export type VerbKind = "regular" | "spelling" | "stem" | "irregular";
 export type StemChange = "e-ie" | "o-ue" | "e-i" | "u-ue" | "i-ie";
 type Cls = "ar" | "er" | "ir";
 type Six = [string, string, string, string, string, string];
+
+export interface CellMarks {
+  present: Record<Person, boolean>;
+  preterite: Record<Person, boolean>;
+  imperfect: Record<Person, boolean>;
+  future: Record<Person, boolean>;
+  conditional: Record<Person, boolean>;
+  presentSubjunctive: Record<Person, boolean>;
+  imperfectSubjunctive: Record<Person, boolean>;
+  futureSubjunctive: Record<Person, boolean>;
+  presentPerfect: Record<Person, boolean>;
+  pluperfect: Record<Person, boolean>;
+  futurePerfect: Record<Person, boolean>;
+  conditionalPerfect: Record<Person, boolean>;
+  presentPerfectSubjunctive: Record<Person, boolean>;
+  pluperfectSubjunctive: Record<Person, boolean>;
+  imperative: Record<ImperativePerson, boolean>;
+  imperativeNegative: Record<ImperativePerson, boolean>;
+  gerund: boolean;
+  participle: boolean;
+}
 
 export interface Paradigm {
   infinitive: string;
@@ -38,8 +71,17 @@ export interface Paradigm {
   future: Record<Person, string>;
   conditional: Record<Person, string>;
   presentSubjunctive: Record<Person, string>;
+  imperfectSubjunctive: Record<Person, string>;
+  futureSubjunctive: Record<Person, string>;
+  presentPerfect: Record<Person, string>;
+  pluperfect: Record<Person, string>;
+  futurePerfect: Record<Person, string>;
+  conditionalPerfect: Record<Person, string>;
+  presentPerfectSubjunctive: Record<Person, string>;
+  pluperfectSubjunctive: Record<Person, string>;
   imperative: Record<ImperativePerson, string>;
   imperativeNegative: Record<ImperativePerson, string>;
+  marks: CellMarks;
   note?: string;
 }
 
@@ -550,6 +592,125 @@ function fixShortImperative(prefix: string, tu: string): string {
   return tu;
 }
 
+const AUX: Record<PerfectTense, Six> = {
+  presentPerfect: ["he", "has", "ha", "hemos", "habéis", "han"],
+  pluperfect: ["había", "habías", "había", "habíamos", "habíais", "habían"],
+  futurePerfect: ["habré", "habrás", "habrá", "habremos", "habréis", "habrán"],
+  conditionalPerfect: ["habría", "habrías", "habría", "habríamos", "habríais", "habrían"],
+  presentPerfectSubjunctive: ["haya", "hayas", "haya", "hayamos", "hayáis", "hayan"],
+  pluperfectSubjunctive: ["hubiera", "hubieras", "hubiera", "hubiéramos", "hubierais", "hubieran"],
+};
+
+function accentLastVowel(stem: string): string {
+  const marked: Record<string, string> = { a: "á", e: "é", i: "í", o: "ó", u: "ú" };
+  for (let i = stem.length - 1; i >= 0; i -= 1) {
+    const ch = stem[i] ?? "";
+    const base = ch.normalize("NFD").replace(/\u0301/g, "");
+    if (base.length === 1 && "aeiou".includes(base)) {
+      if ("áéíóú".includes(ch)) return stem;
+      return stem.slice(0, i) + marked[base] + stem.slice(i + 1);
+    }
+  }
+  return stem;
+}
+
+function fromEllos(ellos: string, kind: "ra" | "re"): Six {
+  const stem = ellos.endsWith("ron") ? ellos.slice(0, -3) : ellos;
+  const nosotros = accentLastVowel(stem) + (kind === "ra" ? "ramos" : "remos");
+  if (kind === "ra") return [stem + "ra", stem + "ras", stem + "ra", nosotros, stem + "rais", stem + "ran"];
+  return [stem + "re", stem + "res", stem + "re", nosotros, stem + "reis", stem + "ren"];
+}
+
+function withAux(aux: Six, participle: string): Six {
+  return aux.map((form) => `${form} ${participle}`) as Six;
+}
+
+function naiveBundle(inf: string): ReturnType<typeof buildForms> & {
+  imperfectSubjunctive: Six;
+  futureSubjunctive: Six;
+} {
+  const cls = verbClass(inf) ?? "ar";
+  const stem = inf.slice(0, -2);
+  const present = PRESENT[cls].map((ending) => stem + ending) as Six;
+  const preterite = PRETERITE[cls].map((ending) => stem + ending) as Six;
+  const imperfect = IMPERFECT[cls].map((ending) => stem + ending) as Six;
+  const bare = stripAccent(inf);
+  const future = FUTURE.map((ending) => bare + ending) as Six;
+  const conditional = CONDITIONAL.map((ending) => bare + ending) as Six;
+  const subjunctive = SUBJUNCTIVE[cls].map((ending) => stem + ending) as Six;
+  return {
+    present,
+    preterite,
+    imperfect,
+    future,
+    conditional,
+    subjunctive,
+    imperfectSubjunctive: fromEllos(preterite[5], "ra"),
+    futureSubjunctive: fromEllos(preterite[5], "re"),
+    gerund: cls === "ar" ? `${stem}ando` : `${stem}iendo`,
+    participle: cls === "ar" ? `${stem}ado` : `${stem}ido`,
+    imperativeTu: present[2],
+    stemChange: null,
+  };
+}
+
+function marksFor(inf: string, forms: ReturnType<typeof buildForms>, subRa: Six, subRe: Six): CellMarks {
+  const naive = naiveBundle(inf);
+  const flag = (actual: Six, regular: Six): Record<Person, boolean> => ({
+    yo: actual[0] !== regular[0],
+    tu: actual[1] !== regular[1],
+    el: actual[2] !== regular[2],
+    nosotros: actual[3] !== regular[3],
+    vosotros: actual[4] !== regular[4],
+    ellos: actual[5] !== regular[5],
+  });
+  const participleIrregular = forms.participle !== naive.participle;
+  const perfect = {
+    yo: participleIrregular,
+    tu: participleIrregular,
+    el: participleIrregular,
+    nosotros: participleIrregular,
+    vosotros: participleIrregular,
+    ellos: participleIrregular,
+  };
+  const sub = forms.subjunctive;
+  const naiveSub = naive.subjunctive;
+  const imperative: Record<ImperativePerson, boolean> = {
+    tu: forms.imperativeTu !== naive.imperativeTu,
+    el: sub[2] !== naiveSub[2],
+    nosotros: sub[3] !== naiveSub[3],
+    vosotros: false,
+    ellos: sub[5] !== naiveSub[5],
+  };
+  const imperativeNegative: Record<ImperativePerson, boolean> = {
+    tu: sub[1] !== naiveSub[1],
+    el: sub[2] !== naiveSub[2],
+    nosotros: sub[3] !== naiveSub[3],
+    vosotros: sub[4] !== naiveSub[4],
+    ellos: sub[5] !== naiveSub[5],
+  };
+  return {
+    present: flag(forms.present, naive.present),
+    preterite: flag(forms.preterite, naive.preterite),
+    imperfect: flag(forms.imperfect, naive.imperfect),
+    future: flag(forms.future, naive.future),
+    conditional: flag(forms.conditional, naive.conditional),
+    presentSubjunctive: flag(sub, naiveSub),
+    imperfectSubjunctive: flag(subRa, naive.imperfectSubjunctive),
+    futureSubjunctive: flag(subRe, naive.futureSubjunctive),
+    presentPerfect: perfect,
+    pluperfect: perfect,
+    futurePerfect: perfect,
+    conditionalPerfect: perfect,
+    presentPerfectSubjunctive: perfect,
+    pluperfectSubjunctive: perfect,
+    imperative,
+    imperativeNegative,
+    gerund: forms.gerund !== naive.gerund,
+    participle: participleIrregular,
+  };
+}
+
 function eirParadigm(inf: string, reflexive: boolean): Paradigm {
   const root = inf.slice(0, -3);
   const withE = `${root}e`;
@@ -599,21 +760,33 @@ function finish(
     vosotros: sub[4],
     ellos: sub[5],
   };
+  const imperfectSubjunctive = fromEllos(forms.preterite[5], "ra");
+  const futureSubjunctive = fromEllos(forms.preterite[5], "re");
+  const part = forms.participle;
   const paradigm: Paradigm = {
     infinitive: display,
     reflexive,
     kind,
     stemChange,
     gerund: forms.gerund,
-    participle: forms.participle,
+    participle: part,
     present: six(forms.present),
     preterite: six(forms.preterite),
     imperfect: six(forms.imperfect),
     future: six(forms.future),
     conditional: six(forms.conditional),
     presentSubjunctive: six(sub),
+    imperfectSubjunctive: six(imperfectSubjunctive),
+    futureSubjunctive: six(futureSubjunctive),
+    presentPerfect: six(withAux(AUX.presentPerfect, part)),
+    pluperfect: six(withAux(AUX.pluperfect, part)),
+    futurePerfect: six(withAux(AUX.futurePerfect, part)),
+    conditionalPerfect: six(withAux(AUX.conditionalPerfect, part)),
+    presentPerfectSubjunctive: six(withAux(AUX.presentPerfectSubjunctive, part)),
+    pluperfectSubjunctive: six(withAux(AUX.pluperfectSubjunctive, part)),
     imperative,
     imperativeNegative,
+    marks: marksFor(infinitiveForVos, forms, imperfectSubjunctive, futureSubjunctive),
   };
   if (note) paradigm.note = note;
   return paradigm;
@@ -750,14 +923,23 @@ export function isIrregularVerb(infinitive: string): boolean {
   return kind !== null && kind !== "regular";
 }
 
-export const TENSE_LABELS: Record<Tense, string> = {
-  present: "Presente",
-  preterite: "Pretérito",
-  imperfect: "Imperfecto",
-  future: "Futuro",
-  conditional: "Condicional",
-  presentSubjunctive: "Presente de subjuntivo",
-  imperative: "Imperativo",
+export const TENSE_LABELS: Record<Tense | PerfectTense | "imperativeNegative", string> = {
+  present: "Present",
+  preterite: "Preterite",
+  imperfect: "Imperfect",
+  future: "Future",
+  conditional: "Conditional",
+  presentSubjunctive: "Present subjunctive",
+  imperfectSubjunctive: "Imperfect subjunctive",
+  futureSubjunctive: "Future subjunctive",
+  imperative: "Imperative",
+  imperativeNegative: "Negative imperative",
+  presentPerfect: "Present perfect",
+  pluperfect: "Pluperfect",
+  futurePerfect: "Future perfect",
+  conditionalPerfect: "Conditional perfect",
+  presentPerfectSubjunctive: "Present perfect subjunctive",
+  pluperfectSubjunctive: "Pluperfect subjunctive",
 };
 
 export const PERSON_LABELS: Record<Person, string> = {
@@ -768,3 +950,135 @@ export const PERSON_LABELS: Record<Person, string> = {
   vosotros: "vosotros",
   ellos: "ellos / ustedes",
 };
+
+const CLITIC: Record<Person, string> = {
+  yo: "me",
+  tu: "te",
+  el: "se",
+  nosotros: "nos",
+  vosotros: "os",
+  ellos: "se",
+};
+
+function baseVowel(ch: string): string {
+  return ch.normalize("NFD").replace(/[\u0301\u0308]/g, "").normalize("NFC");
+}
+
+function vowelKind(ch: string): "strong" | "weak" | null {
+  const base = baseVowel(ch);
+  if (base === "a" || base === "e" || base === "o") return "strong";
+  if (base === "i" || base === "u") return "weak";
+  return null;
+}
+
+interface Syllable {
+  start: number;
+  end: number;
+  stress: number;
+}
+
+function syllables(word: string): Syllable[] {
+  const chars = [...word];
+  const out: Syllable[] = [];
+  let i = 0;
+  while (i < chars.length) {
+    if (!vowelKind(chars[i] ?? "")) {
+      i += 1;
+      continue;
+    }
+    const group = [i];
+    i += 1;
+    while (i < chars.length && vowelKind(chars[i] ?? "")) {
+      const prev = chars[i - 1] ?? "";
+      const cur = chars[i] ?? "";
+      const prevAccent = prev !== baseVowel(prev);
+      const curAccent = cur !== baseVowel(cur);
+      const hiatus =
+        (vowelKind(prev) === "strong" && vowelKind(cur) === "strong") ||
+        (vowelKind(prev) === "weak" && prevAccent) ||
+        (vowelKind(cur) === "weak" && curAccent);
+      if (hiatus) break;
+      group.push(i);
+      i += 1;
+    }
+    const accented = group.find((index) => (chars[index] ?? "") !== baseVowel(chars[index] ?? ""));
+    const strong = group.find((index) => vowelKind(chars[index] ?? "") === "strong");
+    out.push({ start: group[0] ?? i, end: group[group.length - 1] ?? i, stress: accented ?? strong ?? group[0] ?? 0 });
+  }
+  return out;
+}
+
+function stressIndex(word: string): number {
+  const chars = [...word];
+  const syls = syllables(word);
+  if (!syls.length) return 0;
+  const accented = chars.findIndex((ch) => /[áéíóú]/.test(ch));
+  if (accented >= 0) {
+    const syl = syls.find((item) => accented >= item.start && accented <= item.end);
+    return syl?.stress ?? accented;
+  }
+  if (syls.length === 1) return syls[0]?.stress ?? 0;
+  const last = baseVowel(chars[chars.length - 1] ?? "");
+  const soft = "aeiouns".includes(last);
+  const syl = syls[soft ? syls.length - 2 : syls.length - 1];
+  return syl?.stress ?? 0;
+}
+
+function applyStress(word: string, stress: number): string {
+  const chars = [...word].map((ch) => baseVowel(ch));
+  const syls = syllables(chars.join(""));
+  const sylIndex = Math.max(0, syls.findIndex((item) => stress >= item.start && stress <= item.end));
+  const last = baseVowel(chars[chars.length - 1] ?? "");
+  const soft = "aeiouns".includes(last);
+  const fallback = soft ? Math.max(0, syls.length - 2) : Math.max(0, syls.length - 1);
+  const neighbor = vowelKind(chars[stress - 1] ?? "") || vowelKind(chars[stress + 1] ?? "");
+  const base = chars[stress] ?? "";
+  const hiatus = (base === "i" || base === "u") && neighbor;
+  if (sylIndex === fallback && !hiatus) return chars.join("");
+  const accent: Record<string, string> = { a: "á", e: "é", i: "í", o: "ó", u: "ú" };
+  if (accent[base]) chars[stress] = accent[base];
+  return chars.join("");
+}
+
+export function attachClitic(form: string, clitic: string): string {
+  let stem = form;
+  let stress = stressIndex(form);
+  if (clitic === "nos" && stem.endsWith("s")) stem = stem.slice(0, -1);
+  if (clitic === "os" && stem.endsWith("d")) {
+    stem = stem.slice(0, -1);
+    if (stress >= stem.length) stress = Math.max(0, stem.length - 1);
+  }
+  if (stress >= stem.length) stress = Math.max(0, stem.length - 1);
+  return applyStress(stem + clitic, stress);
+}
+
+export type ShownSlot = FiniteTense | PerfectTense | "imperative" | "imperativeNegative" | "gerund" | "participle";
+
+function rawForm(paradigm: Paradigm, slot: ShownSlot, person: Person): string {
+  if (slot === "gerund") return paradigm.gerund;
+  if (slot === "participle") return paradigm.participle;
+  if (slot === "imperative") return paradigm.imperative[person === "yo" ? "tu" : person];
+  if (slot === "imperativeNegative") return paradigm.imperativeNegative[person === "yo" ? "tu" : person];
+  return paradigm[slot][person];
+}
+
+export function displayForm(paradigm: Paradigm, slot: ShownSlot, person: Person): string {
+  const raw = rawForm(paradigm, slot, person);
+  if (!paradigm.reflexive || slot === "gerund" || slot === "participle") return raw;
+  const base = paradigm.infinitive.endsWith("se") ? paradigm.infinitive.slice(0, -2) : paradigm.infinitive;
+  if (slot === "imperative") {
+    if (base === "ir" && person === "nosotros") return "vámonos";
+    if (base === "ir" && person === "vosotros") return "iros";
+    return attachClitic(raw, CLITIC[person]);
+  }
+  if (slot === "imperativeNegative") return `no ${CLITIC[person]} ${raw}`;
+  return `${CLITIC[person]} ${raw}`;
+}
+
+export function formIsIrregular(paradigm: Paradigm, slot: ShownSlot, person: Person): boolean {
+  if (slot === "gerund") return paradigm.marks.gerund;
+  if (slot === "participle") return paradigm.marks.participle;
+  if (slot === "imperative") return paradigm.marks.imperative[person === "yo" ? "tu" : person];
+  if (slot === "imperativeNegative") return paradigm.marks.imperativeNegative[person === "yo" ? "tu" : person];
+  return paradigm.marks[slot][person];
+}

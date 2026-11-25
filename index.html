@@ -18,6 +18,7 @@
         const theme = saved.theme || "system";
         const dark = theme === "dark" || (theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
         if (dark) document.documentElement.classList.add("dark");
+        if (saved.textSize === "large") document.documentElement.classList.add("large");
       } catch (e) {}
     </script>
   </head>

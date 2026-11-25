@@ -14,8 +14,12 @@ export function inBand(rank: number, filters: Filters): boolean {
 
 export function wordMatches(word: Word, filters: Filters): boolean {
   if (!inBand(word.rank, filters)) return false;
-  if (filters.irregularOnly) return word.pos === "verb" && isIrregularVerb(word.lemma);
   if (filters.poses.length > 0 && !filters.poses.includes(word.pos)) return false;
+  if (filters.irregularOnly && word.pos === "verb" && !isIrregularVerb(word.lemma)) return false;
+  if (filters.irregularOnly && filters.poses.length === 0 && word.pos !== "verb") return false;
+  if (filters.gender && filters.gender !== "all" && word.pos === "noun") {
+    if (word.gender !== filters.gender && word.gender !== "mf") return false;
+  }
   return true;
 }
 

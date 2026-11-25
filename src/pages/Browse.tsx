@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState, useEffect } from "react";
 import { Link } from "react-router-dom";
+import { GenderTag } from "../components/GenderTag.tsx";
 import { useApp } from "../context.tsx";
 import { searchMatch } from "../lib/deck.ts";
 import { isIrregularVerb } from "../lib/conjugate.ts";
-import type { Pos, Word } from "../lib/types.ts";
+import type { GenderFilter, Pos, Word } from "../lib/types.ts";
 import { POS_LABEL } from "../lib/types.ts";
 
 const ROW = 76;
@@ -14,6 +15,7 @@ export function Browse() {
   const [pos, setPos] = useState<Pos | "all">("all");
   const [band, setBand] = useState(5000);
   const [irregular, setIrregular] = useState(false);
+  const [gender, setGender] = useState<GenderFilter>("all");
   const parent = useRef<HTMLDivElement>(null);
   const [scroll, setScroll] = useState(0);
   const [height, setHeight] = useState(640);
@@ -23,9 +25,11 @@ export function Browse() {
       if (word.rank > band) return false;
       if (pos !== "all" && word.pos !== pos) return false;
       if (irregular && !(word.pos === "verb" && isIrregularVerb(word.lemma))) return false;
+      if (gender !== "all" && word.pos === "noun" && word.gender !== gender && word.gender !== "mf") return false;
+      if (gender !== "all" && word.pos !== "noun") return false;
       return searchMatch(query, word.lemma, word.gloss);
     });
-  }, [corpus.words, query, pos, band, irregular]);
+  }, [corpus.words, query, pos, band, irregular, gender]);
 
   useEffect(() => {
     const el = parent.current;
@@ -63,6 +67,11 @@ export function Browse() {
           </select>
         </label>
         <button className={`chip${irregular ? " on" : ""}`} type="button" onClick={() => setIrregular((value) => !value)}>Irregular verbs</button>
+        {(["all", "m", "f"] as const).map((value) => (
+          <button key={value} className={`chip${gender === value ? " on" : ""}`} type="button" onClick={() => setGender(value)}>
+            {value === "all" ? "Any gender" : value === "m" ? "Masculine" : "Feminine"}
+          </button>
+        ))}
       </div>
       <p className="muted">{items.length.toLocaleString()} shown</p>
       {items.length === 0 ? (
@@ -85,10 +94,10 @@ function WordRow({ word, top }: { word: Word; top: number }) {
     <Link className="hit" to={`/word/${encodeURIComponent(word.id)}`} style={{ position: "absolute", top, height: ROW, left: 0, right: 0 }}>
       <span className="rank">{word.rank}</span>
       <span>
-        <b>{word.article && word.article !== "el/la" ? `${word.article} ` : ""}{word.lemma}</b>
+        <b>{word.lemma}</b>
         <small>{word.gloss}</small>
       </span>
-      <small>{word.pos}</small>
+      {word.pos === "noun" ? <GenderTag gender={word.gender} article={word.article} /> : <small>{word.pos}</small>}
     </Link>
   );
 }

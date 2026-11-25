@@ -1,158 +1,144 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { AccentBar } from "../components/AccentBar.tsx";
+import { ConjugationTables, WordForms } from "../components/Conjugation.tsx";
+import { GenderTag } from "../components/GenderTag.tsx";
+import { GradeBar } from "../components/GradeBar.tsx";
 import { useApp } from "../context.tsx";
-import { checkAnswer, type AnswerResult } from "../lib/answer.ts";
-import { isIrregularVerb } from "../lib/conjugate.ts";
-import { buildQueue, choiceOptions, type StudyItem } from "../lib/deck.ts";
-import { newCard, reviewCard, type Rating } from "../lib/srs.ts";
-import { speakSpanish } from "../lib/speech.ts";
-import type { Filters, Pool, Pos, StudyMode, Word } from "../lib/types.ts";
-import { CATEGORIES, POS_LABEL } from "../lib/types.ts";
+import { checkAnswer, checkNormalized, type AnswerResult } from "../lib/answer.ts";
+import { conjugate } from "../lib/conjugate.ts";
+import { choiceOptions } from "../lib/deck.ts";
+import { newCard, type Rating } from "../lib/srs.ts";
+import {
+  buildSession,
+  buildSteps,
+  choicePool,
+  englishOf,
+  expectedOf,
+  selectionSummary,
+  spanishOf,
+  type Presentation,
+  type Step,
+  type StudyCard,
+} from "../lib/session.ts";
+import { THEME_GROUPS, THEMES } from "../data/themes.ts";
+import { CATEGORIES, POS_LABEL, type Filters, type Pos, type StudyMode, type StudySet } from "../lib/types.ts";
 
-const ACCENTS = ["á", "é", "í", "ó", "ú", "ñ", "ü", "¿", "¡"];
+const SETS: { id: StudySet; title: string; detail: string }[] = [
+  { id: "words", title: "Words", detail: "The frequency deck" },
+  { id: "phrases", title: "Phrases", detail: "Short everyday lines" },
+  { id: "verbs", title: "Verb forms", detail: "Type a conjugation" },
+  { id: "prepositions", title: "Prepositions", detail: "pensar en, soñar con" },
+  { id: "pronouns", title: "Pronouns", detail: "Rewrite with lo, le, se" },
+  { id: "gender", title: "Noun gender", detail: "Pick el or la" },
+  { id: "themes", title: "Themes", detail: "Places and topics" },
+  { id: "grammar", title: "Grammar", detail: "Short lesson drills" },
+];
+
 const MODES: { id: StudyMode; label: string }[] = [
+  { id: "mix", label: "Mix" },
   { id: "reveal", label: "Flip" },
   { id: "type", label: "Type" },
   { id: "choice", label: "Choice" },
-  { id: "listen", label: "Listen" },
+  { id: "match", label: "Match" },
 ];
 
-function promptEs(item: StudyItem): string {
-  if (item.kind === "phrase") return item.phrase.es;
-  const word = item.word;
-  if (word.article && word.article !== "el/la") return `${word.article} ${word.lemma}`;
-  return word.lemma;
-}
-
-function promptEn(item: StudyItem): string {
-  return item.kind === "phrase" ? item.phrase.en : item.word.gloss;
-}
-
-function expectedAnswers(item: StudyItem): string[] {
-  if (item.kind === "phrase") return [item.phrase.es];
-  const word = item.word;
-  const answers = [word.lemma, ...word.senses];
-  if (word.article && word.article !== "el/la") answers.push(`${word.article} ${word.lemma}`);
-  return answers;
+function instruction(step: Step): string {
+  const card = step.cards[0];
+  if (!card) return "";
+  if (step.presentation === "match") return "Tap a Spanish phrase, then its English match.";
+  if (card.kind === "gender") return "Is this noun masculine or feminine?";
+  if (card.kind === "prep") return step.presentation === "type" ? "Type the preposition." : "Which preposition does this verb take?";
+  if (card.kind === "pronoun") return step.presentation === "choice" ? "Pick the right answer." : "Type the rewritten sentence.";
+  if (card.kind === "conj") return `Type the ${card.person} form.`;
+  if (card.kind === "grammar") return step.presentation === "choice" ? "Pick the form that fits." : "Type the missing word.";
+  if (step.presentation === "type") return "Type the Spanish.";
+  if (step.presentation === "choice") return "Pick the meaning.";
+  return "Look at the Spanish, then check yourself.";
 }
 
 export function Study() {
-  const { corpus, cards, settings, filters, setFilters, meta, grade } = useApp();
+  const app = useApp();
   const [params] = useSearchParams();
-  const poolParam = params.get("pool");
-  const pool: Pool = poolParam === "starred" || poolParam === "difficult" ? poolParam : filters.pool;
-  const active: Filters = { ...filters, pool };
-  const [queue, setQueue] = useState<StudyItem[] | null>(null);
+  const autostart = params.get("start") === "1";
+  const pool = params.get("pool");
+  const [phase, setPhase] = useState<"setup" | "run" | "done">(autostart || pool ? "run" : "setup");
+  const [steps, setSteps] = useState<Step[] | null>(null);
   const [index, setIndex] = useState(0);
-  const [stage, setStage] = useState<"ask" | "retry" | "grade">("ask");
+  const [show, setShow] = useState(false);
   const [typed, setTyped] = useState("");
   const [verdict, setVerdict] = useState<{ result: AnswerResult; suggestion?: string } | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
-  const [help, setHelp] = useState(false);
-  const [summary, setSummary] = useState<{ correct: number; total: number } | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const againCount = useRef(new Map<string, number>());
+  const [matched, setMatched] = useState<string[]>([]);
+  const [armed, setArmed] = useState<{ side: "es" | "en"; value: string } | null>(null);
+  const [misses, setMisses] = useState(0);
   const score = useRef({ correct: 0, total: 0 });
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const current = queue?.[index];
-  const choices = useMemo(() => {
-    if (!current || (active.mode !== "choice" && active.mode !== "listen")) return [];
-    const correct = current.kind === "phrase" ? current.phrase.en : current.word.senses[0] || current.word.gloss;
-    const poolItems = current.kind === "phrase"
-      ? corpus.phrases.map((phrase) => phrase.en)
-      : corpus.words.filter((word) => word.pos === current.word.pos).map((word) => word.senses[0] || word.gloss);
-    return choiceOptions(correct, poolItems);
-  }, [current, active.mode, corpus.phrases, corpus.words]);
+  const active: Filters = pool === "starred" || pool === "difficult" ? { ...app.filters, pool } : app.filters;
 
-  useEffect(() => {
-    if (!current || active.mode !== "listen" || stage !== "ask") return;
-    speakSpanish(promptEs(current), settings);
-  }, [current, active.mode, stage, settings]);
-
-  function start(next = active) {
-    const built = buildQueue(
-      corpus.words,
-      corpus.phrases,
-      cards,
+  function begin(next = active) {
+    const queue = buildSession(
+      app.corpus.words,
+      app.corpus.phrases,
+      app.cards,
       next,
-      Math.max(0, settings.newPerDay - meta.newToday),
+      Math.max(0, app.settings.newPerDay - app.meta.newToday),
       Date.now(),
+      app.settings.region,
     );
-    againCount.current = new Map();
     score.current = { correct: 0, total: 0 };
-    setSummary(null);
-    setQueue(built);
+    setSteps(buildSteps(queue, next.mode));
     setIndex(0);
-    resetCard();
+    reset();
+    setPhase(queue.length ? "run" : "done");
   }
 
-  function resetCard() {
-    setStage("ask");
+  function reset() {
+    setShow(false);
     setTyped("");
     setVerdict(null);
     setPicked(null);
-  }
-
-  function finishGrade(rating: Rating) {
-    if (!current || !queue) return;
-    void grade(current.id, rating, active.mode);
-    score.current.total += 1;
-    if (rating !== "again") score.current.correct += 1;
-    const nextQueue = [...queue];
-    let nextIndex = index + 1;
-    if (rating === "again") {
-      const seen = (againCount.current.get(current.id) ?? 0) + 1;
-      againCount.current.set(current.id, seen);
-      if (seen < 3) {
-        const insertAt = Math.min(nextQueue.length, index + 4);
-        nextQueue.splice(insertAt, 0, current);
-        setQueue(nextQueue);
-      }
-    }
-    if (nextIndex >= nextQueue.length) {
-      setSummary({ ...score.current });
-      return;
-    }
-    setIndex(nextIndex);
-    resetCard();
-  }
-
-  function submitTyped() {
-    if (!current) return;
-    const result = checkAnswer(typed, expectedAnswers(current));
-    if (result.result === "accent" && stage === "ask") {
-      setVerdict(result);
-      setStage("retry");
-      return;
-    }
-    setVerdict(result.result === "accent" ? { result: "wrong", suggestion: result.suggestion } : result);
-    setStage("grade");
+    setMatched([]);
+    setArmed(null);
+    setMisses(0);
   }
 
   useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      const typing = (event.target as HTMLElement | null)?.tagName === "INPUT";
-      if (event.key === "?" && !typing) {
-        setHelp(true);
-        return;
-      }
-      if (!current || summary) return;
-      if (stage === "grade") {
-        const map: Record<string, Rating> = { "1": "again", "2": "hard", "3": "good", "4": "easy" };
-        const rating = map[event.key];
-        if (rating) finishGrade(rating);
-        return;
-      }
-      if (active.mode === "reveal" && event.key === " " && !typing) {
-        event.preventDefault();
-        setStage("grade");
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
+    if ((autostart || pool) && !steps) begin(active);
+    // The saved selection is the session. Rebuild only when Start is tapped.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  function insertAccent(char: string) {
+  const step = steps?.[index];
+  const card = step?.cards[0];
+
+  function finish(rating: Rating) {
+    if (!step) return;
+    for (const item of step.cards) {
+      const mode = item.kind === "conj" ? `conj:${item.tense}` : step.presentation;
+      void app.grade(item.id, rating, mode);
+    }
+    score.current.total += step.cards.length;
+    if (rating !== "again") score.current.correct += step.cards.length;
+    if (!steps || index + 1 >= steps.length) {
+      setPhase("done");
+      return;
+    }
+    setIndex(index + 1);
+    reset();
+  }
+
+  function judge(value: string) {
+    if (!card || !step) return;
+    const expected = expectedOf(card, step.presentation);
+    const strict = card.kind === "pronoun" || card.kind === "conj" || card.kind === "prep" || card.kind === "grammar" || card.kind === "gender";
+    const result = strict ? checkNormalized(value, expected) : checkAnswer(value, expected);
+    setVerdict(result);
+    setShow(true);
+  }
+
+  function insert(char: string) {
     const el = inputRef.current;
     if (!el) {
       setTyped((value) => value + char);
@@ -160,8 +146,7 @@ export function Study() {
     }
     const start = el.selectionStart ?? typed.length;
     const end = el.selectionEnd ?? start;
-    const next = typed.slice(0, start) + char + typed.slice(end);
-    setTyped(next);
+    setTyped(typed.slice(0, start) + char + typed.slice(end));
     requestAnimationFrame(() => {
       el.focus();
       const caret = start + char.length;
@@ -169,257 +154,383 @@ export function Study() {
     });
   }
 
-  return (
-    <div className="page">
-      <header>
-        <p className="eyebrow">Study</p>
-        <h1>{pool === "starred" ? "Starred" : pool === "difficult" ? "Difficult" : "Today’s queue"}</h1>
-      </header>
-      <DeckControls filters={active} onChange={(next) => { setFilters({ ...next, pool: filters.pool }); }} />
-      {queue === null ? (
-        <button className="btn primary wide" type="button" onClick={() => start()}>Start session</button>
-      ) : summary ? (
-        <section className="panel">
-          <h2>{summary.correct} of {summary.total} felt solid</h2>
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (!step || phase !== "run") return;
+      const typing = (event.target as HTMLElement | null)?.tagName === "INPUT";
+      if (show) {
+        const map: Record<string, Rating> = { "1": "again", "2": "hard", "3": "good", "4": "easy" };
+        const rating = map[event.key];
+        if (rating) finish(rating);
+        return;
+      }
+      if (step.presentation === "reveal" && event.key === " " && !typing) {
+        event.preventDefault();
+        setShow(true);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  if (phase === "setup") {
+    return <Setup filters={app.filters} onChange={app.setFilters} onStart={() => begin(app.filters)} />;
+  }
+  if (phase === "run" && !steps) {
+    return <div className="page"><h1>Getting your cards…</h1></div>;
+  }
+  if (phase === "done" || !step || !card) {
+    const empty = !steps?.length;
+    return (
+      <div className="page">
+        <header>
+          <p className="eyebrow">Session</p>
+          <h1>{empty ? "Nothing matched" : "That’s the session"}</h1>
+        </header>
+        <section className="panel stack">
+          {empty ? (
+            <p>Widen the frequency range or turn on another word type. Your last selection is saved.</p>
+          ) : (
+            <h2>{score.current.correct} of {score.current.total} felt solid</h2>
+          )}
           <p className="muted">Again counts as a miss. Hard, Good, and Easy count as remembered.</p>
           <div className="row">
-            <button className="btn primary" type="button" onClick={() => start()}>Another round</button>
-            <button className="btn" type="button" onClick={() => setQueue(null)}>Change deck</button>
+            <button className="btn primary" type="button" onClick={() => begin(active)}>Study again</button>
+            <button className="btn" type="button" onClick={() => { setSteps(null); setPhase("setup"); }}>Change selection</button>
+            <Link className="btn" to="/">Today</Link>
           </div>
         </section>
-      ) : !current ? (
-        <section className="panel">
-          <h2>Nothing is due in this deck.</h2>
-          <p className="muted">Widen the frequency band, switch to phrases, or come back when reviews are due.</p>
-        </section>
-      ) : (
-        <Session
-          item={current}
-          index={index}
-          total={queue.length}
-          mode={active.mode}
-          stage={stage}
-          typed={typed}
-          setTyped={setTyped}
-          verdict={verdict}
-          picked={picked}
-          choices={choices}
-          inputRef={inputRef}
-          card={cards.get(current.id) ?? newCard(current.id)}
-          onReveal={() => setStage("grade")}
-          onSubmit={submitTyped}
-          onPick={(option) => {
-            setPicked(option);
-            const correct = current.kind === "phrase" ? current.phrase.en : current.word.senses[0] || current.word.gloss;
-            setVerdict({ result: option === correct ? "correct" : "wrong", suggestion: correct });
-            setStage("grade");
-          }}
-          onGrade={finishGrade}
-          onSpeak={() => speakSpanish(promptEs(current), settings)}
-          onAccent={insertAccent}
-          onHelp={() => setHelp(true)}
+      </div>
+    );
+  }
+
+  const options = step.presentation === "choice"
+    ? card.kind === "gender"
+      ? ["el", "la", "either"]
+      : card.kind === "pronoun" && card.exercise.choices
+        ? card.exercise.choices
+        : card.kind === "grammar" && card.question.choices
+          ? card.question.choices
+          : card.kind === "prep"
+            ? ["a", "de", "en", "con", "por", "para"]
+            : choiceOptions(englishOf(card), choicePool(card, app.corpus.words, app.corpus.phrases))
+    : [];
+
+  return (
+    <div className="page">
+      <div className="progress" aria-hidden="true"><i style={{ width: `${((index + 1) / (steps?.length || 1)) * 100}%` }} /></div>
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <span className="muted">{index + 1} / {steps?.length}</span>
+        <button className="btn ghost" type="button" onClick={() => setPhase("done")}>End</button>
+      </div>
+      <p className="lede" style={{ margin: 0 }}>{instruction(step)}</p>
+      {step.presentation === "match" ? (
+        <MatchBoard
+          cards={step.cards}
+          matched={matched}
+          armed={armed}
+          onArm={setArmed}
+          onMiss={() => setMisses((value) => value + 1)}
+          onLock={(value) => setMatched((current) => [...current, value])}
+          done={matched.length >= step.cards.length}
         />
+      ) : (
+        <article className="card study-card">
+          <CardFace card={card} presentation={step.presentation} show={show} />
+          {step.presentation === "choice" && (
+            <div className="choices">
+              {options.map((option) => {
+                const correct = expectedOf(card, "choice").some((answer) => answer.toLowerCase() === option.toLowerCase())
+                  || option.toLowerCase() === englishOf(card).toLowerCase()
+                  || (card.kind === "gender" && option === "either" && (card.word.gender === "mf" || card.word.article === "el/la"));
+                const right = show && correct;
+                const wrong = show && option === picked && !correct;
+                return (
+                  <button
+                    key={option}
+                    className={`choice${right ? " right" : ""}${wrong ? " wrong" : ""}`}
+                    type="button"
+                    disabled={show}
+                    onClick={() => { setPicked(option); judge(option); }}
+                  >
+                    {option}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {step.presentation === "type" && !show && (
+            <>
+              <AccentBar onInsert={insert} />
+              <input
+                ref={inputRef}
+                value={typed}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder="Type here"
+                onChange={(event) => setTyped(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") judge(typed); }}
+              />
+              <button className="btn primary" type="button" onClick={() => judge(typed)}>Check</button>
+            </>
+          )}
+          {step.presentation === "reveal" && !show && (
+            <button className="btn primary wide" type="button" onClick={() => setShow(true)}>Show answer</button>
+          )}
+          {show && verdict && (
+            <div className={`verdict ${verdict.result}`}>
+              {verdict.result === "correct" && "That’s it."}
+              {verdict.result === "accent" && `Almost. The spelling is ${verdict.suggestion}.`}
+              {verdict.result === "wrong" && `Answer: ${verdict.suggestion ?? expectedOf(card, step.presentation)[0]}`}
+            </div>
+          )}
+          {show && (card.kind === "pronoun" || card.kind === "grammar" || card.kind === "prep") && (
+            <p className="muted">{card.kind === "prep" ? card.entry.contrast || card.entry.example : card.kind === "pronoun" ? card.exercise.explain : card.question.explain}</p>
+          )}
+          {show && step.presentation === "reveal" && <p className="gloss">{englishOf(card)}</p>}
+          {show && (card.kind === "word" || (card.kind === "theme" && card.item.gender)) && <BackMatter card={card} region={app.settings.region} />}
+        </article>
       )}
-      {help && (
-        <dialog open>
-          <h2>Keys</h2>
-          <p>Space shows the answer. 1 Again, 2 Hard, 3 Good, 4 Easy. Enter checks a typed answer.</p>
-          <button className="btn" type="button" onClick={() => setHelp(false)}>Close</button>
-        </dialog>
+      {step.presentation === "match" && misses > 0 && matched.length >= step.cards.length && (
+        <p className="muted">{misses} mismatch{misses === 1 ? "" : "es"}. Rate the round honestly.</p>
       )}
+      {(show || (step.presentation === "match" && matched.length >= step.cards.length)) && (
+        <div className="dock">
+          <GradeBar card={app.cards.get(card.id) ?? newCard(card.id)} onGrade={finish} />
+        </div>
+      )}
+      <p className="kbd">Space shows a flip card · 1 Again, 2 Hard, 3 Good, 4 Easy</p>
     </div>
   );
 }
 
-function DeckControls({ filters, onChange }: { filters: Filters; onChange: (next: Filters) => void }) {
-  const poses = Object.entries(POS_LABEL) as [Pos, string][];
+function CardFace({ card, presentation, show }: { card: StudyCard; presentation: Presentation; show: boolean }) {
+  if (card.kind === "conj") {
+    return (
+      <>
+        <span className="chip">{card.tense}</span>
+        <h2 className="lemma">{card.lemma}</h2>
+        <p className="muted">{card.person} · {card.gloss}</p>
+        {show && <p className="gloss">{card.answer}</p>}
+      </>
+    );
+  }
+  if (card.kind === "prep") {
+    const blank = card.entry.example.replace(new RegExp(`\\b${card.entry.prep}\\b`, "i"), "___");
+    return (
+      <>
+        <span className="chip">{card.entry.verb}</span>
+        <h2 className="gloss">{presentation === "reveal" ? card.entry.verb : blank}</h2>
+        <p className="muted">{card.entry.gloss}</p>
+        {show && <p className="gloss">{card.entry.prep} · {card.entry.example}</p>}
+      </>
+    );
+  }
+  if (card.kind === "pronoun" || card.kind === "grammar") {
+    const prompt = card.kind === "pronoun" ? card.exercise.prompt : card.question.prompt;
+    return (
+      <>
+        <span className="chip">{card.kind === "pronoun" ? `Level ${card.exercise.level}` : card.lessonTitle}</span>
+        <h2 className="gloss">{prompt}</h2>
+      </>
+    );
+  }
+  if (card.kind === "gender") {
+    return (
+      <>
+        <GenderTag gender={card.word.gender} article={card.word.article} />
+        <h2 className="lemma">{card.word.lemma}</h2>
+        <p className="muted">{card.word.gloss}</p>
+        {show && <p className="gloss">{card.word.article}</p>}
+      </>
+    );
+  }
+  const frontSpanish = presentation !== "type";
   return (
-    <section className="panel" style={{ display: "grid", gap: 12 }}>
-      <div className="chips">
-        {MODES.map((mode) => (
-          <button key={mode.id} className={`chip${filters.mode === mode.id ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, mode: mode.id })}>
-            {mode.label}
-          </button>
-        ))}
+    <>
+      <div className="row">
+        {card.kind === "word" && <GenderTag gender={card.word.gender} article={card.word.article} />}
+        {card.kind === "theme" && card.item.gender && <GenderTag gender={card.item.gender} article={card.item.article} />}
+        <span className="chip">{card.kind === "word" ? card.word.pos : card.kind === "theme" ? card.themeTitle : "phrase"}</span>
       </div>
-      <div className="chips">
-        {([100, 500, 1000, 2000, 3000, 5000] as const).map((band) => (
-          <button key={band} className={`chip${filters.band === band ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, band })}>
-            Top {band}
-          </button>
-        ))}
-        <button className={`chip${filters.band === "custom" ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, band: "custom" })}>
-          Range
-        </button>
-      </div>
-      {filters.band === "custom" && (
-        <div className="row">
-          <label className="field">From rank<input type="number" min={1} max={5000} value={filters.rankMin} onChange={(event) => onChange({ ...filters, rankMin: Number(event.target.value) })} /></label>
-          <label className="field">To rank<input type="number" min={1} max={5000} value={filters.rankMax} onChange={(event) => onChange({ ...filters, rankMax: Number(event.target.value) })} /></label>
-        </div>
-      )}
-      <div className="chips">
-        <button className={`chip${filters.source === "words" ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, source: "words" })}>Words</button>
-        <button className={`chip${filters.source === "phrases" ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, source: "phrases" })}>Phrases</button>
-        <button className={`chip${filters.source === "both" ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, source: "both" })}>Both</button>
-        <button className={`chip${filters.irregularOnly ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, irregularOnly: !filters.irregularOnly })}>
-          Irregular verbs
-        </button>
-      </div>
-      {filters.source !== "phrases" && (
-        <div className="chips">
-          {poses.map(([pos, label]) => {
-            const on = filters.poses.includes(pos);
-            return (
-              <button
-                key={pos}
-                className={`chip${on ? " on" : ""}`}
-                type="button"
-                onClick={() => onChange({ ...filters, poses: on ? filters.poses.filter((item) => item !== pos) : [...filters.poses, pos] })}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-      {filters.source !== "words" && (
-        <label className="field">
-          Phrase category
-          <select value={filters.category} onChange={(event) => onChange({ ...filters, category: event.target.value })}>
-            {CATEGORIES.map((category) => <option key={category.id} value={category.id}>{category.label}</option>)}
-          </select>
-        </label>
-      )}
-    </section>
+      <h2 className={frontSpanish ? "lemma" : "gloss"}>{frontSpanish ? spanishOf(card) : englishOf(card)}</h2>
+      {show && presentation === "type" && <p className="gloss">{spanishOf(card)}</p>}
+    </>
   );
 }
 
-function Session(props: {
-  item: StudyItem;
-  index: number;
-  total: number;
-  mode: StudyMode;
-  stage: "ask" | "retry" | "grade";
-  typed: string;
-  setTyped: (value: string) => void;
-  verdict: { result: AnswerResult; suggestion?: string } | null;
-  picked: string | null;
-  choices: string[];
-  inputRef: RefObject<HTMLInputElement | null>;
-  card: ReturnType<typeof newCard>;
-  onReveal: () => void;
-  onSubmit: () => void;
-  onPick: (option: string) => void;
-  onGrade: (rating: Rating) => void;
-  onSpeak: () => void;
-  onAccent: (char: string) => void;
-  onHelp: () => void;
+function BackMatter({ card, region }: { card: StudyCard; region: "latam" | "spain" }) {
+  if (card.kind === "word" && card.word.pos === "verb" && conjugate(card.word.lemma)) {
+    return <ConjugationTables lemma={card.word.lemma} region={region} />;
+  }
+  if (card.kind === "word") return <WordForms word={card.word} />;
+  if (card.kind === "theme") {
+    return (
+      <blockquote className="example">
+        <p>{card.item.example}</p>
+        <p className="en">{card.item.exampleEn}</p>
+      </blockquote>
+    );
+  }
+  return null;
+}
+
+function MatchBoard(props: {
+  cards: StudyCard[];
+  matched: string[];
+  armed: { side: "es" | "en"; value: string } | null;
+  onArm: (next: { side: "es" | "en"; value: string } | null) => void;
+  onLock: (value: string) => void;
+  onMiss: () => void;
+  done: boolean;
 }) {
-  const spanishFirst = props.mode === "reveal" || props.mode === "choice" || props.mode === "listen";
-  const correctChoice = props.item.kind === "phrase" ? props.item.phrase.en : props.item.word.senses[0] || props.item.word.gloss;
-  const heading = props.mode === "listen" && props.stage === "ask"
-    ? "Listen"
-    : props.mode === "type"
-      ? promptEn(props.item)
-      : null;
+  const pairs = props.cards.map((card) => ({ id: card.id, es: spanishOf(card), en: englishOf(card) }));
+  const english = useMemo(() => choiceOptions(pairs[0]?.en ?? "", pairs.map((pair) => pair.en)), [props.cards]);
+  function tap(side: "es" | "en", value: string, id: string) {
+    if (props.matched.includes(id) || props.done) return;
+    if (!props.armed) {
+      props.onArm({ side, value });
+      return;
+    }
+    if (props.armed.side === side) {
+      props.onArm({ side, value });
+      return;
+    }
+    const es = side === "es" ? value : props.armed.value;
+    const en = side === "en" ? value : props.armed.value;
+    const hit = pairs.find((pair) => pair.es === es && pair.en === en);
+    if (hit) props.onLock(hit.id);
+    else props.onMiss();
+    props.onArm(null);
+  }
   return (
-    <section style={{ display: "grid", gap: 12 }}>
-      <div className="progress" aria-hidden="true"><i style={{ width: `${((props.index + 1) / props.total) * 100}%` }} /></div>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <span className="muted">{props.index + 1} / {props.total}</span>
-        <button className="btn ghost" type="button" onClick={props.onHelp}>Keys</button>
+    <div className="match-grid">
+      <div className="stack">
+        {pairs.map((pair) => (
+          <button key={pair.id} className={`choice${props.matched.includes(pair.id) ? " locked" : ""}${props.armed?.side === "es" && props.armed.value === pair.es ? " on" : ""}`} type="button" onClick={() => tap("es", pair.es, pair.id)}>
+            {pair.es}
+          </button>
+        ))}
       </div>
-      <article className="card study-card">
-        <div className="row">
-          <span className="chip">{props.item.kind === "word" ? props.item.word.pos : props.item.phrase.category}</span>
-          {props.item.kind === "word" && <span className="muted">#{props.item.word.rank}</span>}
-          {props.item.kind === "word" && props.item.word.pos === "verb" && isIrregularVerb(props.item.word.lemma) && <span className="muted">irregular</span>}
-          <button className="icon-btn" type="button" onClick={props.onSpeak} aria-label="Play Spanish">♪</button>
-        </div>
-        {heading !== null ? (
-          <h2 className={heading.length > 42 ? "gloss" : "lemma"}>{heading}</h2>
-        ) : (
-          <h2 className="lemma"><Spanish item={props.item} /></h2>
-        )}
-        {props.stage === "grade" && (
-          <p className="gloss">{props.mode === "type" ? promptEs(props.item) : promptEn(props.item)}</p>
-        )}
-        {props.stage === "grade" && props.item.kind === "word" && props.item.word.example && (
-          <blockquote className="example">
-            <p>{props.item.word.example.es}</p>
-            <p className="en">{props.item.word.example.en}</p>
-          </blockquote>
-        )}
-        {props.verdict && (
-          <div className={`verdict ${props.verdict.result}`}>
-            {props.verdict.result === "correct" && "That’s it."}
-            {props.verdict.result === "accent" && `Almost. The accent is the difference: ${props.verdict.suggestion}`}
-            {props.verdict.result === "wrong" && `Answer: ${props.verdict.suggestion ?? (spanishFirst ? promptEn(props.item) : promptEs(props.item))}`}
+      <div className="stack">
+        {english.map((label) => {
+          const pair = pairs.find((item) => item.en === label);
+          const id = pair?.id ?? label;
+          return (
+            <button key={label} className={`choice${pair && props.matched.includes(pair.id) ? " locked" : ""}${props.armed?.side === "en" && props.armed.value === label ? " on" : ""}`} type="button" onClick={() => tap("en", label, id)}>
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Setup({ filters, onChange, onStart }: { filters: Filters; onChange: (next: Filters) => void; onStart: () => void }) {
+  const poses = Object.entries(POS_LABEL) as [Pos, string][];
+  function toggleSet(id: StudySet) {
+    const sets = filters.sets.includes(id) ? filters.sets.filter((item) => item !== id) : [...filters.sets, id];
+    const source = sets.includes("words") && sets.includes("phrases") ? "both" : sets.includes("phrases") && !sets.includes("words") ? "phrases" : "words";
+    onChange({ ...filters, sets, source });
+  }
+  const wordsOn = filters.sets.includes("words") || filters.sets.includes("verbs") || filters.sets.includes("gender");
+  return (
+    <div className="page">
+      <header>
+        <p className="eyebrow">Study</p>
+        <h1>What do you want to practice?</h1>
+        <p className="lede">Turn on one or more. This choice stays on this device.</p>
+      </header>
+      <section className="stack">
+        {SETS.map((set) => {
+          const on = filters.sets.includes(set.id);
+          return (
+            <button key={set.id} className={`pick${on ? " on" : ""}`} type="button" aria-pressed={on} onClick={() => toggleSet(set.id)}>
+              <span><b>{set.title}</b><small>{set.detail}</small></span>
+              <span>{on ? "On" : "Off"}</span>
+            </button>
+          );
+        })}
+      </section>
+      {wordsOn && (
+        <section className="panel stack">
+          <h2>Words</h2>
+          <div className="chips">
+            {([100, 500, 1000, 2000, 3000, 5000] as const).map((band) => (
+              <button key={band} className={`chip${filters.band === band ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, band })}>Top {band}</button>
+            ))}
+            <button className={`chip${filters.band === "custom" ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, band: "custom" })}>Range</button>
           </div>
-        )}
-        {(props.mode === "choice" || props.mode === "listen") && (
-          <div className="choices">
-            {props.choices.map((option) => {
-              const revealed = props.stage === "grade";
-              const right = revealed && option === correctChoice;
-              const wrong = revealed && option === props.picked && option !== correctChoice;
+          {filters.band === "custom" && (
+            <div className="row">
+              <label className="field">From rank<input type="number" min={1} max={5000} value={filters.rankMin} onChange={(event) => onChange({ ...filters, rankMin: Number(event.target.value) })} /></label>
+              <label className="field">To rank<input type="number" min={1} max={5000} value={filters.rankMax} onChange={(event) => onChange({ ...filters, rankMax: Number(event.target.value) })} /></label>
+            </div>
+          )}
+          <p className="muted">Word types. Leave them all off to include every type.</p>
+          <div className="chips">
+            {poses.map(([pos, label]) => {
+              const on = filters.poses.includes(pos);
               return (
-                <button key={option} className={`choice${right ? " right" : ""}${wrong ? " wrong" : ""}`} type="button" disabled={props.stage === "grade"} onClick={() => props.onPick(option)}>
-                  {option}
+                <button key={pos} className={`chip${on ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, poses: on ? filters.poses.filter((item) => item !== pos) : [...filters.poses, pos] })}>
+                  {label}
                 </button>
               );
             })}
           </div>
-        )}
-        {props.mode === "type" && props.stage !== "grade" && (
-          <>
-            <div className="accent-bar">
-              {ACCENTS.map((char) => (
-                <button key={char} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => props.onAccent(char)}>{char}</button>
-              ))}
-            </div>
-            <input
-              ref={props.inputRef}
-              type="text"
-              value={props.typed}
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              placeholder="Type the Spanish"
-              onChange={(event) => props.setTyped(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") props.onSubmit();
-              }}
-            />
-            <button className="btn primary" type="button" onClick={props.onSubmit}>Check</button>
-          </>
-        )}
-        {props.mode === "reveal" && props.stage === "ask" && (
-          <button className="btn primary wide" type="button" onClick={props.onReveal}>Show meaning</button>
-        )}
-      </article>
-      {props.stage === "grade" && (
-        <div className="rates">
-          {(["again", "hard", "good", "easy"] as const).map((rating) => {
-            const next = reviewCard(props.card, rating, Date.now());
-            const label = rating === "again" ? "10m" : `${next.interval}d`;
-            return (
-              <button key={rating} className={`rate ${rating}`} type="button" onClick={() => props.onGrade(rating)}>
-                {rating}<small>{label}</small>
+          <div className="chips">
+            <button className={`chip${filters.irregularOnly ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, irregularOnly: !filters.irregularOnly })}>Irregular verbs only</button>
+            {(["all", "m", "f"] as const).map((gender) => (
+              <button key={gender} className={`chip${filters.gender === gender ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, gender })}>
+                {gender === "all" ? "Any gender" : gender === "m" ? "Masculine nouns" : "Feminine nouns"}
               </button>
-            );
-          })}
-        </div>
+            ))}
+          </div>
+        </section>
       )}
-      <p className="kbd">Space reveals · 1–4 rate · Enter checks typing</p>
-    </section>
+      {filters.sets.includes("phrases") && (
+        <section className="panel stack">
+          <h2>Phrases</h2>
+          <div className="chips">
+            {CATEGORIES.map((category) => (
+              <button key={category.id} className={`chip${filters.category === category.id ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, category: category.id })}>{category.label}</button>
+            ))}
+          </div>
+        </section>
+      )}
+      {filters.sets.includes("themes") && (
+        <section className="panel stack">
+          <h2>Themes</h2>
+          <p className="muted">Leave them all off to include every theme.</p>
+          {THEME_GROUPS.map((group) => (
+            <div key={group} className="stack">
+              <h3>{group}</h3>
+              <div className="chips">
+                {THEMES.filter((theme) => theme.group === group).map((theme) => {
+                  const on = filters.themes.includes(theme.id);
+                  return (
+                    <button key={theme.id} className={`chip${on ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, themes: on ? filters.themes.filter((id) => id !== theme.id) : [...filters.themes, theme.id] })}>
+                      {theme.title}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+      <section className="panel stack">
+        <h2>How should the cards work?</h2>
+        <div className="chips">
+          {MODES.map((mode) => (
+            <button key={mode.id} className={`chip${filters.mode === mode.id ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, mode: mode.id })}>{mode.label}</button>
+          ))}
+        </div>
+      </section>
+      <button className="btn primary huge" type="button" onClick={onStart}>Start session</button>
+      <p className="muted">{selectionSummary(filters)}</p>
+    </div>
   );
-}
-
-function Spanish({ item }: { item: StudyItem }) {
-  if (item.kind === "phrase") return item.phrase.es;
-  const word: Word = item.word;
-  if (!word.article || word.article === "el/la") return word.lemma;
-  return <><span className="article">{word.article}</span>{word.lemma}</>;
 }

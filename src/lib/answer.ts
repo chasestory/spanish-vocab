@@ -42,6 +42,20 @@ export function acceptedAnswers(expected: string[]): string[] {
   return [...out];
 }
 
+const LEADING_SUBJECT = /^(yo|tú|tu|él|ella|usted|nosotros|nosotras|vosotros|vosotras|ellos|ellas|ustedes)\s+/;
+
+/** Case, punctuation, and an optional leading subject. Accents still matter. */
+export function checkNormalized(input: string, expected: string[]): { result: AnswerResult; suggestion?: string } {
+  const got = normalizeAnswer(input).replace(LEADING_SUBJECT, "");
+  const answers = expected.map((item) => ({ raw: item.trim(), norm: normalizeAnswer(item) })).filter((item) => item.norm);
+  if (!got) return { result: "wrong", suggestion: answers[0]?.raw };
+  if (answers.some((item) => item.norm === got)) return { result: "correct" };
+  const folded = foldAccents(got);
+  const match = answers.find((item) => foldAccents(item.norm) === folded);
+  if (match) return { result: "accent", suggestion: match.raw };
+  return { result: "wrong", suggestion: answers[0]?.raw };
+}
+
 export function checkAnswer(input: string, expected: string[]): { result: AnswerResult; suggestion?: string } {
   const answers = acceptedAnswers(expected);
   const got = normalizeAnswer(input);

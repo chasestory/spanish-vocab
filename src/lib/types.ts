@@ -47,9 +47,11 @@ export interface CorpusMeta {
   filters: string[];
 }
 
-export type StudyMode = "reveal" | "type" | "choice" | "listen";
+export type StudyMode = "reveal" | "type" | "choice" | "listen" | "mix" | "match";
 export type Band = 100 | 500 | 1000 | 2000 | 3000 | 5000 | "custom";
 export type Pool = "deck" | "starred" | "difficult";
+export type GenderFilter = "all" | "m" | "f";
+export type StudySet = "words" | "phrases" | "verbs" | "prepositions" | "pronouns" | "themes" | "gender" | "grammar";
 
 export interface Filters {
   band: Band;
@@ -61,6 +63,9 @@ export interface Filters {
   category: string;
   mode: StudyMode;
   pool: Pool;
+  gender: GenderFilter;
+  themes: string[];
+  sets: StudySet[];
 }
 
 export interface Settings {
@@ -70,6 +75,7 @@ export interface Settings {
   rate: number;
   voiceURI: string;
   theme: "system" | "light" | "dark";
+  textSize: "normal" | "large";
 }
 
 export interface MetaState {
@@ -131,6 +137,7 @@ export const defaultSettings: Settings = {
   rate: 0.92,
   voiceURI: "",
   theme: "system",
+  textSize: "normal",
 };
 
 export const defaultFilters: Filters = {
@@ -141,8 +148,11 @@ export const defaultFilters: Filters = {
   irregularOnly: false,
   source: "words",
   category: "all",
-  mode: "reveal",
+  mode: "mix",
   pool: "deck",
+  gender: "all",
+  themes: [],
+  sets: ["words"],
 };
 
 export const defaultMeta = (): MetaState => ({
