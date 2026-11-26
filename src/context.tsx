@@ -85,9 +85,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       (settings.theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     root.classList.toggle("dark", dark);
     root.classList.toggle("large", settings.textSize === "large");
+    const themeMeta = document.querySelector('meta[name="theme-color"]:not([media])');
+    themeMeta?.setAttribute("content", dark ? "#141210" : "#f3efe6");
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = () => {
-      if (settings.theme === "system") root.classList.toggle("dark", media.matches);
+      if (settings.theme !== "system") return;
+      const nextDark = media.matches;
+      root.classList.toggle("dark", nextDark);
+      themeMeta?.setAttribute("content", nextDark ? "#141210" : "#f3efe6");
     };
     media.addEventListener("change", onChange);
     return () => media.removeEventListener("change", onChange);

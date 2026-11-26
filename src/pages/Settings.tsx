@@ -108,7 +108,7 @@ export function Settings() {
     <div className="page">
       <header>
         <p className="eyebrow">Settings</p>
-        <h1>Make it yours</h1>
+        <h1>Settings</h1>
       </header>
       <section className="panel stack">
         <div className="toggle">

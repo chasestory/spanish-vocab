@@ -44,8 +44,8 @@ export function Progress() {
     <div className="page">
       <header>
         <p className="eyebrow">Progress</p>
-        <h1>{streakNow(meta) === 1 ? "1-day streak" : `${streakNow(meta)}-day streak`}</h1>
-        <p className="lede">{learned.length.toLocaleString()} words learned · {accuracy === null ? "no reviews in 30 days" : `${accuracy}% accurate over 30 days`}</p>
+        <h1>Progress</h1>
+        <p className="lede">{streakNow(meta) > 0 ? `${streakNow(meta)}-day streak` : "No streak yet"} · {learned.length.toLocaleString()} words learned · {accuracy === null ? "no reviews yet" : `${accuracy}% right over 30 days`}</p>
       </header>
       <section className="panel">
         <h2>Last four weeks</h2>

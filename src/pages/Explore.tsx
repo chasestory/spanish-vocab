@@ -6,14 +6,16 @@ import { THEMES } from "../data/themes.ts";
 import { searchMatch } from "../lib/deck.ts";
 
 const LINKS = [
-  { to: "/words", title: "Words", detail: "All 5,000 lemmas, with gender" },
-  { to: "/themes", title: "Themes", detail: "Rooms, trails, food, work" },
-  { to: "/verbs", title: "Verbs", detail: "Full conjugations" },
-  { to: "/phrases", title: "Phrases", detail: "2,000 short lines" },
-  { to: "/prepositions", title: "Verb + preposition", detail: "pensar en, depender de" },
-  { to: "/pronouns", title: "Pronouns", detail: "lo, le, and se lo" },
-  { to: "/grammar", title: "Grammar", detail: "Short lessons and drills" },
-  { to: "/saved", title: "My words", detail: "Starred, plus anything you keep missing" },
+  { to: "/words", title: "Words", detail: "The 5,000 most common words" },
+  { to: "/themes", title: "Themes", detail: "Rooms, food, travel, work" },
+  { to: "/verbs", title: "Verbs", detail: "Every tense, on one page" },
+  { to: "/grammar", title: "Grammar", detail: "Short lessons" },
+  { to: "/saved", title: "My words", detail: "Starred, and the ones you miss" },
+];
+const MORE = [
+  { to: "/phrases", title: "Phrases" },
+  { to: "/prepositions", title: "Verb + preposition" },
+  { to: "/pronouns", title: "Pronouns" },
 ];
 
 export function Explore() {
@@ -34,7 +36,7 @@ export function Explore() {
     <div className="page">
       <header>
         <p className="eyebrow">Explore</p>
-        <h1>Find anything</h1>
+        <h1>Look something up</h1>
       </header>
       <input type="search" placeholder="Search Spanish or English" value={query} onChange={(event) => setQuery(event.target.value)} />
       {results ? (
@@ -79,7 +81,15 @@ export function Explore() {
               <span aria-hidden="true">›</span>
             </Link>
           ))}
-          <p className="muted">{stars} starred · struggling words show up under My words after two misses.</p>
+          <details className="mood panel">
+            <summary>More: phrases, prepositions, pronouns</summary>
+            <div className="stack" style={{ marginTop: 8 }}>
+              {MORE.map((link) => (
+                <Link key={link.to} className="pick" to={link.to}><span><b>{link.title}</b></span><span>›</span></Link>
+              ))}
+            </div>
+          </details>
+          <p className="muted">{stars} starred. Miss a card twice and it shows up in My words.</p>
         </div>
       )}
     </div>

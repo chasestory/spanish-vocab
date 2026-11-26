@@ -30,7 +30,13 @@ export function WordPage() {
           {paradigm && paradigm.kind !== "regular" && <span className="muted">{paradigm.kind}</span>}
         </div>
         <h1 className="lemma">{word.lemma}</h1>
-        <p className="gloss">{word.gloss}</p>
+        <p className="gloss">{word.senses[0]?.split(";")[0]?.trim() || word.gloss}</p>
+        {word.senses.length > 1 && (
+          <details className="mood">
+            <summary>More meanings</summary>
+            <p className="muted">{word.senses.slice(1).join(" · ")}</p>
+          </details>
+        )}
         {word.note && <p className="muted">{word.note}</p>}
         {note && word.pos !== "verb" && <p className="muted">{note}</p>}
         {word.example && (

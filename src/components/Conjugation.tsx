@@ -44,16 +44,19 @@ function Table({
       {slots.map((slot) => (
         <div className="tense" key={slot}>
           <strong>{slot === "gerund" ? "Gerund" : slot === "participle" ? "Participle" : TENSE_LABELS[slot]}</strong>
-          {rows.map((person) => {
-            const form = displayForm(paradigm, slot, person);
-            const hot = formIsIrregular(paradigm, slot, person);
-            return (
-              <div className="form-line" key={person}>
-                <span className="muted">{PERSON_LABELS[person]}</span>
-                <b className={hot ? "hot" : undefined}>{form}</b>
-              </div>
-            );
-          })}
+          <div className="person-grid">
+            {rows.map((person) => {
+              const form = displayForm(paradigm, slot, person);
+              const hot = formIsIrregular(paradigm, slot, person);
+              const label = person === "el" ? "él / Ud." : person === "nosotros" ? "nosotros" : person === "vosotros" ? "vosotros" : PERSON_LABELS[person];
+              return (
+                <div className="person-cell" key={person}>
+                  <span>{label}</span>
+                  <b className={hot ? "hot" : undefined}>{form}</b>
+                </div>
+              );
+            })}
+          </div>
         </div>
       ))}
     </div>

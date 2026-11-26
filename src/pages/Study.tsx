@@ -6,7 +6,7 @@ import { GenderTag } from "../components/GenderTag.tsx";
 import { GradeBar } from "../components/GradeBar.tsx";
 import { useApp } from "../context.tsx";
 import { checkAnswer, checkNormalized, type AnswerResult } from "../lib/answer.ts";
-import { conjugate } from "../lib/conjugate.ts";
+import { conjugate, PERSON_LABELS, TENSE_LABELS } from "../lib/conjugate.ts";
 import { choiceOptions } from "../lib/deck.ts";
 import { newCard, type Rating } from "../lib/srs.ts";
 import {
@@ -24,17 +24,6 @@ import {
 import { THEME_GROUPS, THEMES } from "../data/themes.ts";
 import { CATEGORIES, POS_LABEL, type Filters, type Pos, type StudyMode, type StudySet } from "../lib/types.ts";
 
-const SETS: { id: StudySet; title: string; detail: string }[] = [
-  { id: "words", title: "Words", detail: "The frequency deck" },
-  { id: "phrases", title: "Phrases", detail: "Short everyday lines" },
-  { id: "verbs", title: "Verb forms", detail: "Type a conjugation" },
-  { id: "prepositions", title: "Prepositions", detail: "pensar en, soñar con" },
-  { id: "pronouns", title: "Pronouns", detail: "Rewrite with lo, le, se" },
-  { id: "gender", title: "Noun gender", detail: "Pick el or la" },
-  { id: "themes", title: "Themes", detail: "Places and topics" },
-  { id: "grammar", title: "Grammar", detail: "Short lesson drills" },
-];
-
 const MODES: { id: StudyMode; label: string }[] = [
   { id: "mix", label: "Mix" },
   { id: "reveal", label: "Flip" },
@@ -50,7 +39,7 @@ function instruction(step: Step): string {
   if (card.kind === "gender") return "Is this noun masculine or feminine?";
   if (card.kind === "prep") return step.presentation === "type" ? "Type the preposition." : "Which preposition does this verb take?";
   if (card.kind === "pronoun") return step.presentation === "choice" ? "Pick the right answer." : "Type the rewritten sentence.";
-  if (card.kind === "conj") return `Type the ${card.person} form.`;
+  if (card.kind === "conj") return `Type the form for ${PERSON_LABELS[card.person]}.`;
   if (card.kind === "grammar") return step.presentation === "choice" ? "Pick the form that fits." : "Type the missing word.";
   if (step.presentation === "type") return "Type the Spanish.";
   if (step.presentation === "choice") return "Pick the meaning.";
@@ -174,7 +163,7 @@ export function Study() {
   });
 
   if (phase === "setup") {
-    return <Setup filters={app.filters} onChange={app.setFilters} onStart={() => begin(app.filters)} />;
+    return <Setup filters={app.filters} onChange={app.setFilters} onStart={(next) => begin(next ?? app.filters)} />;
   }
   if (phase === "run" && !steps) {
     return <div className="page"><h1>Getting your cards…</h1></div>;
@@ -218,11 +207,14 @@ export function Study() {
 
   return (
     <div className="page">
+      <header className="hero">
+        <p className="eyebrow">Study</p>
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <h1 style={{ fontSize: "1.6rem" }}>{index + 1} of {steps?.length}</h1>
+          <button className="btn ghost" type="button" onClick={() => setPhase("done")}>End</button>
+        </div>
+      </header>
       <div className="progress" aria-hidden="true"><i style={{ width: `${((index + 1) / (steps?.length || 1)) * 100}%` }} /></div>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <span className="muted">{index + 1} / {steps?.length}</span>
-        <button className="btn ghost" type="button" onClick={() => setPhase("done")}>End</button>
-      </div>
       <p className="lede" style={{ margin: 0 }}>{instruction(step)}</p>
       {step.presentation === "match" ? (
         <MatchBoard
@@ -259,24 +251,8 @@ export function Study() {
               })}
             </div>
           )}
-          {step.presentation === "type" && !show && (
-            <>
-              <AccentBar onInsert={insert} />
-              <input
-                ref={inputRef}
-                value={typed}
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
-                placeholder="Type here"
-                onChange={(event) => setTyped(event.target.value)}
-                onKeyDown={(event) => { if (event.key === "Enter") judge(typed); }}
-              />
-              <button className="btn primary" type="button" onClick={() => judge(typed)}>Check</button>
-            </>
-          )}
           {step.presentation === "reveal" && !show && (
-            <button className="btn primary wide" type="button" onClick={() => setShow(true)}>Show answer</button>
+            <button className="btn primary wide" type="button" onClick={() => setShow(true)}>Show the answer</button>
           )}
           {show && verdict && (
             <div className={`verdict ${verdict.result}`}>
@@ -289,8 +265,30 @@ export function Study() {
             <p className="muted">{card.kind === "prep" ? card.entry.contrast || card.entry.example : card.kind === "pronoun" ? card.exercise.explain : card.question.explain}</p>
           )}
           {show && step.presentation === "reveal" && <p className="gloss">{englishOf(card)}</p>}
-          {show && (card.kind === "word" || (card.kind === "theme" && card.item.gender)) && <BackMatter card={card} region={app.settings.region} />}
+          {show && (card.kind === "word" || card.kind === "theme") && (
+            <details className="mood">
+              <summary>See more</summary>
+              <BackMatter card={card} region={app.settings.region} />
+            </details>
+          )}
         </article>
+      )}
+      {step.presentation === "type" && !show && (
+        <div className="type-bar">
+          <AccentBar onInsert={insert} />
+          <input
+            ref={inputRef}
+            value={typed}
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="Type the answer"
+            enterKeyHint="done"
+            onChange={(event) => setTyped(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter") judge(typed); }}
+          />
+          <button className="btn primary wide" type="button" onClick={() => judge(typed)}>Check answer</button>
+        </div>
       )}
       {step.presentation === "match" && misses > 0 && matched.length >= step.cards.length && (
         <p className="muted">{misses} mismatch{misses === 1 ? "" : "es"}. Rate the round honestly.</p>
@@ -309,9 +307,9 @@ function CardFace({ card, presentation, show }: { card: StudyCard; presentation:
   if (card.kind === "conj") {
     return (
       <>
-        <span className="chip">{card.tense}</span>
+        <span className="chip">{TENSE_LABELS[card.tense]}</span>
         <h2 className="lemma">{card.lemma}</h2>
-        <p className="muted">{card.person} · {card.gloss}</p>
+        <p className="muted">{PERSON_LABELS[card.person]} · {card.gloss}</p>
         {show && <p className="gloss">{card.answer}</p>}
       </>
     );
@@ -331,7 +329,7 @@ function CardFace({ card, presentation, show }: { card: StudyCard; presentation:
     const prompt = card.kind === "pronoun" ? card.exercise.prompt : card.question.prompt;
     return (
       <>
-        <span className="chip">{card.kind === "pronoun" ? `Level ${card.exercise.level}` : card.lessonTitle}</span>
+        <span className="chip">{card.kind === "pronoun" ? "Pronouns" : card.lessonTitle}</span>
         <h2 className="gloss">{prompt}</h2>
       </>
     );
@@ -352,7 +350,7 @@ function CardFace({ card, presentation, show }: { card: StudyCard; presentation:
       <div className="row">
         {card.kind === "word" && <GenderTag gender={card.word.gender} article={card.word.article} />}
         {card.kind === "theme" && card.item.gender && <GenderTag gender={card.item.gender} article={card.item.article} />}
-        <span className="chip">{card.kind === "word" ? card.word.pos : card.kind === "theme" ? card.themeTitle : "phrase"}</span>
+        <span className="chip">{card.kind === "word" ? card.word.pos : card.kind === "theme" ? card.themeTitle : "Phrase"}</span>
       </div>
       <h2 className={frontSpanish ? "lemma" : "gloss"}>{frontSpanish ? spanishOf(card) : englishOf(card)}</h2>
       {show && presentation === "type" && <p className="gloss">{spanishOf(card)}</p>}
@@ -428,34 +426,48 @@ function MatchBoard(props: {
   );
 }
 
-function Setup({ filters, onChange, onStart }: { filters: Filters; onChange: (next: Filters) => void; onStart: () => void }) {
+const PRESETS: { id: string; title: string; detail: string; patch: Partial<Filters> }[] = [
+  { id: "quick", title: "Quick mix", detail: "Common words, mixed cards", patch: { sets: ["words"], band: 500, mode: "mix", irregularOnly: false, poses: [], gender: "all", pool: "deck", source: "words" } },
+  { id: "verbs", title: "Verbs", detail: "Type a conjugated form", patch: { sets: ["verbs"], band: 1000, mode: "type", irregularOnly: true, poses: ["verb"], pool: "deck" } },
+  { id: "themes", title: "Themes", detail: "Rooms, food, travel, and more", patch: { sets: ["themes"], themes: [], mode: "mix", pool: "deck" } },
+  { id: "grammar", title: "Grammar", detail: "A short lesson, then a few questions", patch: { sets: ["grammar"], mode: "choice", pool: "deck" } },
+];
+
+function Setup({ filters, onChange, onStart }: { filters: Filters; onChange: (next: Filters) => void; onStart: (next?: Filters) => void }) {
   const poses = Object.entries(POS_LABEL) as [Pos, string][];
+  const [preset, setPreset] = useState("quick");
+  function choose(id: string, patch: Partial<Filters>) {
+    setPreset(id);
+    onChange({ ...filters, ...patch });
+  }
   function toggleSet(id: StudySet) {
     const sets = filters.sets.includes(id) ? filters.sets.filter((item) => item !== id) : [...filters.sets, id];
     const source = sets.includes("words") && sets.includes("phrases") ? "both" : sets.includes("phrases") && !sets.includes("words") ? "phrases" : "words";
+    setPreset("custom");
     onChange({ ...filters, sets, source });
   }
-  const wordsOn = filters.sets.includes("words") || filters.sets.includes("verbs") || filters.sets.includes("gender");
   return (
     <div className="page">
       <header>
         <p className="eyebrow">Study</p>
-        <h1>What do you want to practice?</h1>
-        <p className="lede">Turn on one or more. This choice stays on this device.</p>
+        <h1>What today?</h1>
+        <p className="lede">Pick one. You can fine-tune it under Advanced.</p>
       </header>
       <section className="stack">
-        {SETS.map((set) => {
-          const on = filters.sets.includes(set.id);
-          return (
-            <button key={set.id} className={`pick${on ? " on" : ""}`} type="button" aria-pressed={on} onClick={() => toggleSet(set.id)}>
-              <span><b>{set.title}</b><small>{set.detail}</small></span>
-              <span>{on ? "On" : "Off"}</span>
-            </button>
-          );
-        })}
+        {PRESETS.map((item) => (
+          <button key={item.id} className={`pick${preset === item.id ? " on" : ""}`} type="button" onClick={() => choose(item.id, item.patch)}>
+            <span><b>{item.title}</b><small>{item.detail}</small></span>
+          </button>
+        ))}
+        <button className={`pick${preset === "mine" ? " on" : ""}`} type="button" onClick={() => { setPreset("mine"); }}>
+          <span><b>My words</b><small>Only the ones you starred</small></span>
+        </button>
       </section>
-      {wordsOn && (
-        <section className="panel stack">
+      <button className="btn primary huge" type="button" onClick={() => onStart(preset === "mine" ? { ...filters, pool: "starred" } : filters)}>Start</button>
+      <details className="mood panel">
+        <summary>Advanced</summary>
+        <div className="stack" style={{ marginTop: 8 }}>
+        <section className="stack">
           <h2>Words</h2>
           <div className="chips">
             {([100, 500, 1000, 2000, 3000, 5000] as const).map((band) => (
@@ -469,7 +481,7 @@ function Setup({ filters, onChange, onStart }: { filters: Filters; onChange: (ne
               <label className="field">To rank<input type="number" min={1} max={5000} value={filters.rankMax} onChange={(event) => onChange({ ...filters, rankMax: Number(event.target.value) })} /></label>
             </div>
           )}
-          <p className="muted">Word types. Leave them all off to include every type.</p>
+          <p className="muted">Word types. Leave these off to include every type.</p>
           <div className="chips">
             {poses.map(([pos, label]) => {
               const on = filters.poses.includes(pos);
@@ -488,8 +500,15 @@ function Setup({ filters, onChange, onStart }: { filters: Filters; onChange: (ne
               </button>
             ))}
           </div>
+          <p className="muted">Also include</p>
+          <div className="chips">
+            {(["words", "phrases", "verbs", "prepositions", "pronouns", "gender", "themes", "grammar"] as StudySet[]).map((id) => (
+              <button key={id} className={`chip${filters.sets.includes(id) ? " on" : ""}`} type="button" onClick={() => toggleSet(id)}>
+                {id === "gender" ? "el / la" : id}
+              </button>
+            ))}
+          </div>
         </section>
-      )}
       {filters.sets.includes("phrases") && (
         <section className="panel stack">
           <h2>Phrases</h2>
@@ -521,16 +540,15 @@ function Setup({ filters, onChange, onStart }: { filters: Filters; onChange: (ne
           ))}
         </section>
       )}
-      <section className="panel stack">
-        <h2>How should the cards work?</h2>
+        <h2>Card style</h2>
         <div className="chips">
           {MODES.map((mode) => (
-            <button key={mode.id} className={`chip${filters.mode === mode.id ? " on" : ""}`} type="button" onClick={() => onChange({ ...filters, mode: mode.id })}>{mode.label}</button>
+            <button key={mode.id} className={`chip${filters.mode === mode.id ? " on" : ""}`} type="button" onClick={() => { setPreset("custom"); onChange({ ...filters, mode: mode.id }); }}>{mode.label}</button>
           ))}
         </div>
-      </section>
-      <button className="btn primary huge" type="button" onClick={onStart}>Start session</button>
-      <p className="muted">{selectionSummary(filters)}</p>
+        <p className="muted">{selectionSummary(filters)}</p>
+        </div>
+      </details>
     </div>
   );
 }
